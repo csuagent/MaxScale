@@ -707,6 +707,24 @@ unsigned int consume_leitoi(unsigned char** c)
   }
   return rval;
 }
+
+/**
+ * Converts length-encoded strings to character strings and advanced the pointer to the next unrelated byte.
+ * The caller is responsible for freeing the allocated memory.
+ * @param c Pointer to the first byte of a valid packet.
+ * @return The newly allocated string or NULL of an error occurred
+ */
+char* consume_lestr(unsigned char** c)
+{
+  unsigned int slen = consume_leitoi(c);
+  char *str = calloc((slen + 1), sizeof(char));
+  if(str){
+    memcpy(str,*c,slen);
+    *c += slen;
+  }
+  return str;
+}
+
 /**
  *Checks whether the packet is an EOF packet.
  * @param p Pointer to the first byte of a packet
@@ -842,18 +860,72 @@ static int clientReply(FILTER* instance, void *session, GWBUF *reply)
       
       }else{ /**Result set*/
       
-	unsigned char	*rset = (unsigned char*)reply->sbuf->data;
+	unsigned char	*rset = (unsigned char*)(reply->sbuf->data + 4);
 	char		*tmp;
-	unsigned int	col_cnt = (unsigned int)*(rset+4);
+	unsigned int	row_cnt = 0, col_cnt = consume_leitoi(&rset);
 
 	tmp = calloc(256,sizeof(char));
-	sprintf(tmp,"Columns: %d\n",col_cnt);
+	sprintf(tmp,"Columns: %d",col_cnt);
 	memcpy(combined + offset,tmp,strnlen(tmp,256));
-	offset += strnlen(tmp,256) + 1;
-	memcpy(combined + offset,"\0",1);
+	offset += strnlen(tmp,256);
+	memcpy(combined + offset,"\n",1);
+	offset++;
 	free(tmp);
+	
+	while(!is_eof(rset) && rset < (unsigned char*) reply->end){
+	  
+	  /**Column Definitions*/
+	  pkt_len = pktlen(rset);
+	  rset += 4;
+	  char *catalog = consume_lestr(&rset),
+	    *schema = consume_lestr(&rset),
+	    *table = consume_lestr(&rset),
+	    *org_table = consume_lestr(&rset),
+	    *name = consume_lestr(&rset),
+	    *org_name = consume_lestr(&rset);
+	  unsigned int field_len = consume_leitoi(&rset);
+	  rset += 2; /**Character set*/
+	  rset += 4; /**Column length*/
+	  rset++; /**Type*/
+	  rset += 2;/**Flags*/
+	  rset++; /**Decimals*/
+	  rset += 2; /**Filler*/
+	  
+	  free(catalog);
+	  free(schema);
+	  free(table);
+	  free(org_table);
+	  free(name);
+	  free(org_name);
+	}
+	
+	/**Skip EOF*/
+	rset += 9;
+	
+	while(!is_eof(rset) && rset < (unsigned char*) reply->end){
+
+	  rset += 4;
+	  tmp = consume_lestr(&rset);
+	  memcpy(combined + offset,tmp,strnlen(tmp,1024));
+	  offset += strnlen(tmp,256);
+	  memcpy(combined + offset,"\n",1);
+	  offset++;
+	  row_cnt++;
+	  free(tmp);
+
+	}
+
+	tmp = calloc(256,sizeof(char));
+	sprintf(tmp,"Rows: %d",row_cnt);
+	memcpy(combined + offset,tmp,strnlen(tmp,256));
+	offset += strnlen(tmp,256);
+	memcpy(combined + offset,"\n",1);
+	offset++;
+	free(tmp);
+
 	packet_ok = 1;
-	was_last = 1;
+	was_last = is_eof(rset) ? 1 : 0;
+	
       }
       if(packet_ok){
 	if((err_code = amqp_basic_publish(my_session->conn,my_session->channel,
