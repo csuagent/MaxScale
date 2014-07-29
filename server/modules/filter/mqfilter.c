@@ -603,6 +603,7 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
       prop.content_type = amqp_cstring_bytes("text/plain");
       prop.delivery_mode = AMQP_DELIVERY_PERSISTENT;
       prop.correlation_id = amqp_cstring_bytes(my_session->uid);
+      prop.message_id = amqp_cstring_bytes("query");
       
       gettimeofday(&tv, NULL);
       localtime_r(&tv.tv_sec, &t);
@@ -798,7 +799,7 @@ static int clientReply(FILTER* instance, void *session, GWBUF *reply)
       prop.content_type = amqp_cstring_bytes("text/plain");
       prop.delivery_mode = AMQP_DELIVERY_PERSISTENT;
       prop.correlation_id = amqp_cstring_bytes(my_session->uid);
-      
+      prop.message_id = amqp_cstring_bytes("reply");
       if(!(combined = calloc(GWBUF_LENGTH(reply) + 256,sizeof(char)))){
 	skygw_log_write_flush(LOGFILE_ERROR,
 			      "Error : Out of memory");
