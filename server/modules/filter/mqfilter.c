@@ -597,8 +597,9 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
 
       my_session->was_query = 1;
 
-      prop._flags = AMQP_BASIC_CONTENT_TYPE_FLAG|
-	AMQP_BASIC_DELIVERY_MODE_FLAG|
+      prop._flags = AMQP_BASIC_CONTENT_TYPE_FLAG |
+	AMQP_BASIC_DELIVERY_MODE_FLAG |
+	AMQP_BASIC_MESSAGE_ID_FLAG | 
 	AMQP_BASIC_CORRELATION_ID_FLAG;
       prop.content_type = amqp_cstring_bytes("text/plain");
       prop.delivery_mode = AMQP_DELIVERY_PERSISTENT;
@@ -795,6 +796,7 @@ static int clientReply(FILTER* instance, void *session, GWBUF *reply)
     if(pkt_len > 0){
       prop._flags = AMQP_BASIC_CONTENT_TYPE_FLAG |
 	AMQP_BASIC_DELIVERY_MODE_FLAG |
+	AMQP_BASIC_MESSAGE_ID_FLAG | 
 	AMQP_BASIC_CORRELATION_ID_FLAG;
       prop.content_type = amqp_cstring_bytes("text/plain");
       prop.delivery_mode = AMQP_DELIVERY_PERSISTENT;
