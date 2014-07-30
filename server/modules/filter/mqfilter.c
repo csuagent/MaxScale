@@ -865,7 +865,7 @@ static int clientReply(FILTER* instance, void *session, GWBUF *reply)
       
 	unsigned char	*rset = (unsigned char*)(reply->sbuf->data + 4);
 	char		*tmp;
-	unsigned int	row_cnt = 0, col_cnt = consume_leitoi(&rset);
+	unsigned int	col_cnt = consume_leitoi(&rset);
 
 	tmp = calloc(256,sizeof(char));
 	sprintf(tmp,"Columns: %d",col_cnt);
@@ -874,60 +874,9 @@ static int clientReply(FILTER* instance, void *session, GWBUF *reply)
 	memcpy(combined + offset,"\n",1);
 	offset++;
 	free(tmp);
-	
-	while(!is_eof(rset) && rset < (unsigned char*) reply->end){
-	  
-	  /**Column Definitions*/
-	  pkt_len = pktlen(rset);
-	  rset += 4;
-	  char *catalog = consume_lestr(&rset),
-	    *schema = consume_lestr(&rset),
-	    *table = consume_lestr(&rset),
-	    *org_table = consume_lestr(&rset),
-	    *name = consume_lestr(&rset),
-	    *org_name = consume_lestr(&rset);
-	  unsigned int field_len = consume_leitoi(&rset);
-	  rset += 2; /**Character set*/
-	  rset += 4; /**Column length*/
-	  rset++; /**Type*/
-	  rset += 2;/**Flags*/
-	  rset++; /**Decimals*/
-	  rset += 2; /**Filler*/
-	  
-	  free(catalog);
-	  free(schema);
-	  free(table);
-	  free(org_table);
-	  free(name);
-	  free(org_name);
-	}
-	
-	/**Skip EOF*/
-	rset += 9;
-	
-	while(!is_eof(rset) && rset < (unsigned char*) reply->end){
-
-	  rset += 4;
-	  tmp = consume_lestr(&rset);
-	  memcpy(combined + offset,tmp,strnlen(tmp,1024));
-	  offset += strnlen(tmp,256);
-	  memcpy(combined + offset,"\n",1);
-	  offset++;
-	  row_cnt++;
-	  free(tmp);
-
-	}
-
-	tmp = calloc(256,sizeof(char));
-	sprintf(tmp,"Rows: %d",row_cnt);
-	memcpy(combined + offset,tmp,strnlen(tmp,256));
-	offset += strnlen(tmp,256);
-	memcpy(combined + offset,"\n",1);
-	offset++;
-	free(tmp);
-
+       
 	packet_ok = 1;
-	was_last = is_eof(rset) ? 1 : 0;
+	was_last = 1;
 	
       }
       if(packet_ok){
