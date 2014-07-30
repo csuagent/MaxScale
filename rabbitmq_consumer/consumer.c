@@ -1,3 +1,4 @@
+#include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -15,7 +16,7 @@ int isPair(amqp_message_t* a, amqp_message_t* b)
     b->properties.correlation_id.len;
   
   return strncmp(a->properties.correlation_id.bytes,
-	     b->properties.correlation_id.bytes,
+		 b->properties.correlation_id.bytes,
 		 keylen) == 0 ? 1 : 0;
 }
 int sendToServer(amqp_message_t* a, amqp_message_t* b){
@@ -48,12 +49,13 @@ int sendToServer(amqp_message_t* a, amqp_message_t* b){
 int main(int argc, char** argv)
 {
   char *hostname,*queue;
-  int port, channel = 1, all_ok = 1, have_q = 0, have_r = 0;
+  int port, channel = 1, all_ok = 1, have_q = 0, have_r = 0, status = AMQP_STATUS_OK;
   amqp_socket_t *socket = NULL;
   amqp_connection_state_t conn;
   amqp_rpc_reply_t ret;
   amqp_message_t *query = NULL,*reply = NULL;
   amqp_frame_t frame;
+  struct timeval timeout;
 
   if (argc < 4) {
     fprintf(stderr, "Usage: consumer host port queue\n");
@@ -62,6 +64,8 @@ int main(int argc, char** argv)
   hostname = strdup(argv[1]);
   port = atoi(argv[2]);
   queue = strdup(argv[3]);
+  timeout.tv_sec = 5;
+  timeout.tv_usec = 0;
 
   if((conn = amqp_new_connection()) == NULL || 
      (socket = amqp_tcp_socket_new(conn)) == NULL){
@@ -101,8 +105,14 @@ int main(int argc, char** argv)
       
     if(!have_q){ /**Get a query*/
      
-      amqp_simple_wait_frame(conn,&frame);
-      	
+      status = amqp_simple_wait_frame_noblock(conn,&frame,&timeout);
+      
+      /**No frames to read from server, possibly out of messages*/
+      if(status == AMQP_STATUS_TIMEOUT){ 
+	sleep(timeout.tv_sec);
+	continue;
+      }
+
       if(frame.payload.method.id == AMQP_BASIC_DELIVER_METHOD){
 
 	amqp_basic_deliver_t* decoded = (amqp_basic_deliver_t*)frame.payload.method.decoded;
@@ -122,32 +132,38 @@ int main(int argc, char** argv)
     
     }else if (!have_r){ /**Check for a reply*/
       
-      amqp_simple_wait_frame(conn,&frame);
-      	
+      status = amqp_simple_wait_frame_noblock(conn,&frame,&timeout);      
+
+      /**No frames to read from server, possibly out of messages*/
+      if(status == AMQP_STATUS_TIMEOUT){ 
+	sleep(timeout.tv_sec);
+	continue;
+      }
+	
       if(frame.payload.method.id == AMQP_BASIC_DELIVER_METHOD){
 
 	amqp_basic_deliver_t* decoded = (amqp_basic_deliver_t*)frame.payload.method.decoded;
 
-	  amqp_read_message(conn,channel,reply,0);
-	  if(reply->properties.message_id.len > 0 &&
-	     strncmp(reply->properties.message_id.bytes,
-		     "reply",reply->properties.message_id.len) == 0 && 
-	     isPair(query,reply))
-	    {
-	      amqp_basic_ack(conn,channel,decoded->delivery_tag,0);
-	      have_r = 1;
-	    }else{
-	    amqp_basic_reject(conn,channel,decoded->delivery_tag,1);
-	  }
+	amqp_read_message(conn,channel,reply,0);
+	if(reply->properties.message_id.len > 0 &&
+	   strncmp(reply->properties.message_id.bytes,
+		   "reply",reply->properties.message_id.len) == 0 && 
+	   isPair(query,reply))
+	  {
+	    amqp_basic_ack(conn,channel,decoded->delivery_tag,0);
+	    have_r = 1;
+	  }else{
+	  amqp_basic_reject(conn,channel,decoded->delivery_tag,1);
+	}
     
       }
 
     }else if( have_q && have_r){ /**Pair formed, send to server*/
+ 
+      sendToServer(query,reply);
+      have_q = have_r = 0;
 
-	sendToServer(query,reply);
-	have_q = have_r = 0;
-
-      }
+    }
 
 
   }
