@@ -597,12 +597,14 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
 
       my_session->was_query = 1;
 
-      prop._flags = AMQP_BASIC_CONTENT_TYPE_FLAG|
-	AMQP_BASIC_DELIVERY_MODE_FLAG|
+      prop._flags = AMQP_BASIC_CONTENT_TYPE_FLAG |
+	AMQP_BASIC_DELIVERY_MODE_FLAG |
+	AMQP_BASIC_MESSAGE_ID_FLAG | 
 	AMQP_BASIC_CORRELATION_ID_FLAG;
       prop.content_type = amqp_cstring_bytes("text/plain");
       prop.delivery_mode = AMQP_DELIVERY_PERSISTENT;
       prop.correlation_id = amqp_cstring_bytes(my_session->uid);
+      prop.message_id = amqp_cstring_bytes("query");
       
       gettimeofday(&tv, NULL);
       localtime_r(&tv.tv_sec, &t);
@@ -707,6 +709,24 @@ unsigned int consume_leitoi(unsigned char** c)
   }
   return rval;
 }
+
+/**
+ * Converts length-encoded strings to character strings and advanced the pointer to the next unrelated byte.
+ * The caller is responsible for freeing the allocated memory.
+ * @param c Pointer to the first byte of a valid packet.
+ * @return The newly allocated string or NULL of an error occurred
+ */
+char* consume_lestr(unsigned char** c)
+{
+  unsigned int slen = consume_leitoi(c);
+  char *str = calloc((slen + 1), sizeof(char));
+  if(str){
+    memcpy(str,*c,slen);
+    *c += slen;
+  }
+  return str;
+}
+
 /**
  *Checks whether the packet is an EOF packet.
  * @param p Pointer to the first byte of a packet
@@ -776,11 +796,12 @@ static int clientReply(FILTER* instance, void *session, GWBUF *reply)
     if(pkt_len > 0){
       prop._flags = AMQP_BASIC_CONTENT_TYPE_FLAG |
 	AMQP_BASIC_DELIVERY_MODE_FLAG |
+	AMQP_BASIC_MESSAGE_ID_FLAG | 
 	AMQP_BASIC_CORRELATION_ID_FLAG;
       prop.content_type = amqp_cstring_bytes("text/plain");
       prop.delivery_mode = AMQP_DELIVERY_PERSISTENT;
       prop.correlation_id = amqp_cstring_bytes(my_session->uid);
-      
+      prop.message_id = amqp_cstring_bytes("reply");
       if(!(combined = calloc(GWBUF_LENGTH(reply) + 256,sizeof(char)))){
 	skygw_log_write_flush(LOGFILE_ERROR,
 			      "Error : Out of memory");
@@ -842,18 +863,21 @@ static int clientReply(FILTER* instance, void *session, GWBUF *reply)
       
       }else{ /**Result set*/
       
-	unsigned char	*rset = (unsigned char*)reply->sbuf->data;
+	unsigned char	*rset = (unsigned char*)(reply->sbuf->data + 4);
 	char		*tmp;
-	unsigned int	col_cnt = (unsigned int)*(rset+4);
+	unsigned int	col_cnt = consume_leitoi(&rset);
 
 	tmp = calloc(256,sizeof(char));
-	sprintf(tmp,"Columns: %d\n",col_cnt);
+	sprintf(tmp,"Columns: %d",col_cnt);
 	memcpy(combined + offset,tmp,strnlen(tmp,256));
-	offset += strnlen(tmp,256) + 1;
-	memcpy(combined + offset,"\0",1);
+	offset += strnlen(tmp,256);
+	memcpy(combined + offset,"\n",1);
+	offset++;
 	free(tmp);
+       
 	packet_ok = 1;
 	was_last = 1;
+	
       }
       if(packet_ok){
 	if((err_code = amqp_basic_publish(my_session->conn,my_session->channel,
