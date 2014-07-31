@@ -8,9 +8,17 @@
 #include <amqp.h>
 #include <amqp_framing.h>
 
+typedef struct delivery_t
+{
+  uint64_t dtag;
+  amqp_message_t* message;
+  struct delivery_t *next,*prev;
+}DELIVERY;
+
 typedef struct consumer_t
 {
   char *hostname,*vhost,*user,*passwd,*queue,*dbserver,*dbname,*dbuser,*dbpasswd;
+  DELIVERY* query_stack;
   int port,dbport;
 }CONSUMER;
 
@@ -78,7 +86,7 @@ int sendToServer(amqp_message_t* a, amqp_message_t* b){
 
   }
 
-  printf("pair: %.*s\nquery: %.*s\nreply: %.*s",
+  printf("pair: %.*s\nquery: %.*s\nreply: %.*s\n",
 	 (int)msg->properties.correlation_id.len,
 	 (char *)msg->properties.correlation_id.bytes,
 	 (int)msg->body.len,
@@ -90,26 +98,25 @@ int sendToServer(amqp_message_t* a, amqp_message_t* b){
 int main(int argc, char** argv)
 {
   const char* fname = "consumer.cnf";
-  int channel = 1, all_ok = 1, have_q = 0, have_r = 0, status = AMQP_STATUS_OK;
+  int channel = 1, all_ok = 1, status = AMQP_STATUS_OK;
   amqp_socket_t *socket = NULL;
   amqp_connection_state_t conn;
   amqp_rpc_reply_t ret;
-  amqp_message_t *query = NULL,*reply = NULL;
+  amqp_message_t *reply = NULL;
   amqp_frame_t frame;
   struct timeval timeout;
-
   
-  timeout.tv_sec = 5;
+  timeout.tv_sec = 2;
   timeout.tv_usec = 0;
 
   if((c_inst = calloc(1,sizeof(CONSUMER))) == NULL){
-    fprintf(stderr, "Fatal Error: Cannot allocate enough memory.");
+    printf( "Fatal Error: Cannot allocate enough memory.\n");
     return 1;
   }
 
   /**Parse the INI file*/
   if(ini_parse(fname,handler,NULL) < 0){
-    fprintf(stderr, "Fatal Error: Error parsing configuration file!\n");
+    printf( "Fatal Error: Error parsing configuration file!\n");
     goto fatal_error;
   }
 
@@ -117,25 +124,25 @@ int main(int argc, char** argv)
   if(!c_inst->hostname||!c_inst->vhost||!c_inst->user||
      !c_inst->passwd||!c_inst->dbpasswd||!c_inst->queue||
      !c_inst->dbserver||!c_inst->dbname||!c_inst->dbuser){
-    fprintf(stderr, "Fatal Error: Inadequate configuration file!\n");
+    printf( "Fatal Error: Inadequate configuration file!\n");
     goto fatal_error;    
   }
   
   if((conn = amqp_new_connection()) == NULL || 
      (socket = amqp_tcp_socket_new(conn)) == NULL){
-    fprintf(stderr, "Fatal Error: Cannot create connection object or socket.");
+    printf( "Fatal Error: Cannot create connection object or socket.\n");
     goto fatal_error;
   }
   
   if(amqp_socket_open(socket, c_inst->hostname, c_inst->port)){
-    fprintf(stderr, "Error: Cannot open socket.");
+    printf( "Error: Cannot open socket.\n");
     goto error;
   }
   
   ret = amqp_login(conn, c_inst->vhost, 0, 131072, 0, AMQP_SASL_METHOD_PLAIN, c_inst->user, c_inst->passwd);
 
   if(ret.reply_type != AMQP_RESPONSE_NORMAL){
-    fprintf(stderr, "Error: Cannot login to server.\n");
+    printf( "Error: Cannot login to server.\n");
     goto error;
   }
 
@@ -143,87 +150,132 @@ int main(int argc, char** argv)
   ret = amqp_get_rpc_reply(conn);
 
   if(ret.reply_type != AMQP_RESPONSE_NORMAL){
-    fprintf(stderr, "Error: Cannot open channel.\n");
+    printf( "Error: Cannot open channel.\n");
     goto error;
   }  
 
-  query = malloc(sizeof(amqp_message_t));
   reply = malloc(sizeof(amqp_message_t));
-  if(!query || !reply){
-    fprintf(stderr, "Error: Cannot allocate enough memory.");
+  if(!reply){
+    printf( "Error: Cannot allocate enough memory.\n");
     goto error;
   }
   amqp_basic_consume(conn,channel,amqp_cstring_bytes(c_inst->queue),amqp_empty_bytes,0,0,0,amqp_empty_table);
 
   while(all_ok){
-      
-    if(!have_q){ /**Get a query*/
      
-      status = amqp_simple_wait_frame_noblock(conn,&frame,&timeout);
+    status = amqp_simple_wait_frame_noblock(conn,&frame,&timeout);
+
+    /**No frames to read from server, possibly out of messages*/
+    if(status == AMQP_STATUS_TIMEOUT){ 
+      printf("Frame wait timed out, trying again in %d seconds.\n",((int)timeout.tv_sec)*2);	
+      sleep(timeout.tv_sec);
+      if(timeout.tv_sec < 128){
+	timeout.tv_sec *= 2;
+      }
       
-      /**No frames to read from server, possibly out of messages*/
-      if(status == AMQP_STATUS_TIMEOUT){ 
-	sleep(timeout.tv_sec);
-	continue;
-      }
-
-      if(frame.payload.method.id == AMQP_BASIC_DELIVER_METHOD){
-
-	amqp_basic_deliver_t* decoded = (amqp_basic_deliver_t*)frame.payload.method.decoded;
-	query = malloc(sizeof(amqp_message_t));
-
-	amqp_read_message(conn,channel,query,0);
-	if(query->properties.message_id.len > 0 &&
-	   strncmp(query->properties.message_id.bytes,
-		   "query",query->properties.message_id.len) == 0)
-	  {
-	    amqp_basic_ack(conn,channel,decoded->delivery_tag,0);
-	    have_q = 1;
-	  }else{
-	  amqp_basic_reject(conn,channel,decoded->delivery_tag,1);
-	}
-      }
-    
-    }else if (!have_r){ /**Check for a reply*/
-      
-      status = amqp_simple_wait_frame_noblock(conn,&frame,&timeout);      
-
-      /**No frames to read from server, possibly out of messages*/
-      if(status == AMQP_STATUS_TIMEOUT){ 
-	sleep(timeout.tv_sec);
-	continue;
-      }
-	
-      if(frame.payload.method.id == AMQP_BASIC_DELIVER_METHOD){
-
-	amqp_basic_deliver_t* decoded = (amqp_basic_deliver_t*)frame.payload.method.decoded;
-
-	amqp_read_message(conn,channel,reply,0);
-	if(reply->properties.message_id.len > 0 &&
-	   strncmp(reply->properties.message_id.bytes,
-		   "reply",reply->properties.message_id.len) == 0 && 
-	   isPair(query,reply))
-	  {
-	    amqp_basic_ack(conn,channel,decoded->delivery_tag,0);
-	    have_r = 1;
-	  }else{
-	  amqp_basic_reject(conn,channel,decoded->delivery_tag,1);
-	}
-    
-      }
-
-    }else if( have_q && have_r){ /**Pair formed, send to server*/
- 
-      sendToServer(query,reply);
-      have_q = have_r = 0;
-
+      continue;
+    }else{
+      timeout.tv_sec = 2;
     }
 
+    if(frame.payload.method.id == AMQP_BASIC_DELIVER_METHOD){
+
+      amqp_basic_deliver_t* decoded = (amqp_basic_deliver_t*)frame.payload.method.decoded;
+	
+      amqp_read_message(conn,channel,reply,0);
+
+      if(reply->properties.message_id.len > 0 &&
+	 strncmp(reply->properties.message_id.bytes,
+		 "query",reply->properties.message_id.len) == 0)
+	{
+
+	  /**Found a query, store it*/
+	  DELIVERY* dlvr = calloc(1,sizeof(DELIVERY));
+
+	  if(dlvr){
+
+	    dlvr->dtag = decoded->delivery_tag;
+	    dlvr->message = reply;
+	    dlvr->next = c_inst->query_stack;
+	    if(c_inst->query_stack){
+	      c_inst->query_stack->prev = dlvr;
+	    }
+	    c_inst->query_stack = dlvr;
+	    reply = malloc(sizeof(amqp_message_t));
+	      
+	  }
+
+	}else if(reply->properties.message_id.len > 0 &&
+		 strncmp(reply->properties.message_id.bytes,
+			 "reply",reply->properties.message_id.len) == 0){
+
+	/**Found a reply, try to pair it*/
+	DELIVERY* dlvr = c_inst->query_stack;
+	int was_paired = 0;
+	while(dlvr){
+	  if(isPair(dlvr->message,reply)){
+	    sendToServer(dlvr->message,reply);
+	    amqp_basic_ack(conn,channel,decoded->delivery_tag,0);
+	    amqp_basic_ack(conn,channel,dlvr->dtag,0);
+	    amqp_destroy_message(dlvr->message);
+	    amqp_destroy_message(reply);
+
+	    if(dlvr->next){
+	      dlvr->next->prev = dlvr->prev;
+	    }
+	    if(dlvr->prev){
+	      dlvr->prev->next = dlvr->next;
+	    }
+
+	    if(dlvr == c_inst->query_stack){
+	      if(dlvr->next == NULL){
+		c_inst->query_stack = NULL;
+	      }else{
+		c_inst->query_stack = dlvr->next;
+	      }
+	      
+	    }
+
+	    free(dlvr->message);
+	    free(dlvr);
+	    was_paired = 1;
+	    dlvr = NULL;
+	  }else{
+	    dlvr = dlvr->next;
+	  }
+	}
+	if(!was_paired){
+	  amqp_basic_reject(conn,channel,decoded->delivery_tag,1);
+	  amqp_destroy_message(reply);
+	}
+	  
+      }else{ /**Something neither a query or a reply received, send it back*/
+	amqp_destroy_message(reply);
+	amqp_basic_reject(conn,channel,decoded->delivery_tag,1);
+      }
+      
+    }else{
+      printf("Received method from server: %s\n",amqp_method_name(frame.payload.method.id));
+      all_ok = 0;
+      goto error;
+    }
 
   }
-  return 0;
+
 
  error:
+  
+  if(c_inst && c_inst->query_stack){
+
+    while(c_inst->query_stack){
+      DELIVERY* d = c_inst->query_stack->next;
+      amqp_destroy_message(c_inst->query_stack->message);
+      free(c_inst->query_stack);
+      c_inst->query_stack = d;
+    }
+
+  }
+  
   amqp_channel_close(conn, channel, AMQP_REPLY_SUCCESS);
   amqp_connection_close(conn, AMQP_REPLY_SUCCESS);
   amqp_destroy_connection(conn);
@@ -234,11 +286,10 @@ int main(int argc, char** argv)
     free(c_inst->dbserver);
     free(c_inst->dbname);
     free(c_inst->dbuser);
-    free(c_inst->dbpasswd);
+    free(c_inst->dbpasswd);    
     free(c_inst);
-
+    
   }
 
-
-  return 1;
+  return all_ok;
 }
