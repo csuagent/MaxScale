@@ -549,10 +549,8 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
 {
   MQ_SESSION	*my_session = (MQ_SESSION *)session;
   MQ_INSTANCE	*my_instance = (MQ_INSTANCE *)instance;
-  char		*ptr, t_buf[40], *combined;
+  char		*ptr, t_buf[128], *combined;
   int		length, err_code;
-  struct tm	t;
-  struct timeval	tv;
   amqp_basic_properties_t prop;
   spinlock_acquire(my_instance->rconn_lock);
   if(my_instance->conn_stat != AMQP_STATUS_OK){
@@ -605,14 +603,11 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
       prop.delivery_mode = AMQP_DELIVERY_PERSISTENT;
       prop.correlation_id = amqp_cstring_bytes(my_session->uid);
       prop.message_id = amqp_cstring_bytes("query");
-      
-      gettimeofday(&tv, NULL);
-      localtime_r(&tv.tv_sec, &t);
-      sprintf(t_buf, "%02d:%02d:%02d.%-3d %d/%02d/%d, ",
-	      t.tm_hour, t.tm_min, t.tm_sec, (int)(tv.tv_usec / 1000),
-	      t.tm_mday, t.tm_mon + 1, 1900 + t.tm_year);
 
-      int qlen = length + strnlen(t_buf,40);
+      memset(t_buf,0,128);      
+      sprintf(t_buf, "%lu:",(unsigned long)time(NULL));
+
+      int qlen = length + strnlen(t_buf,128);
       if((combined = malloc((qlen+1)*sizeof(char))) == NULL){
 	skygw_log_write_flush(LOGFILE_ERROR,
 			      "Error : Out of memory");
@@ -757,11 +752,9 @@ static int clientReply(FILTER* instance, void *session, GWBUF *reply)
 {
   MQ_SESSION		*my_session = (MQ_SESSION *)session;
   MQ_INSTANCE		*my_instance = (MQ_INSTANCE *)instance;
-  char			t_buf[40],*combined;
+  char			t_buf[128],*combined;
   unsigned int		err_code = AMQP_STATUS_OK,
     pkt_len = pktlen(reply->sbuf->data), offset = 0;
-  struct tm		t;
-  struct timeval	tv;
   amqp_basic_properties_t prop;
 
   spinlock_acquire(my_instance->rconn_lock);
@@ -807,12 +800,8 @@ static int clientReply(FILTER* instance, void *session, GWBUF *reply)
 			      "Error : Out of memory");
       }
 
-      gettimeofday(&tv, NULL);
-      localtime_r(&tv.tv_sec, &t);
-      memset(t_buf,0,40);
-      sprintf(t_buf, "%02d:%02d:%02d.%-3d %d/%02d/%d, ",
-	      t.tm_hour, t.tm_min, t.tm_sec, (int)(tv.tv_usec / 1000),
-	      t.tm_mday, t.tm_mon + 1, 1900 + t.tm_year);
+      memset(t_buf,0,128);
+      sprintf(t_buf,"%lu:",(unsigned long)time(NULL));
       
       
       memcpy(combined + offset,t_buf,strnlen(t_buf,40));
@@ -828,10 +817,10 @@ static int clientReply(FILTER* instance, void *session, GWBUF *reply)
 	s_flg |= (*ptr++ << 8);
 	wrn |= *ptr++;
 	wrn |= (*ptr++ << 8);
-	sprintf(combined + offset,"OK - affected_rows: %d\n"
-		" last_insert_id: %d\n"
-		" status_flags: %#0x\n"
-		" warnings: %d\n",		
+	sprintf(combined + offset,"OK - affected_rows: %d "
+		" last_insert_id: %d "
+		" status_flags: %#0x "
+		" warnings: %d ",		
 		aff_rows,l_id,s_flg,wrn);
 	offset += strnlen(combined,GWBUF_LENGTH(reply) + 256) - offset;
 
