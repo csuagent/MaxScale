@@ -235,8 +235,8 @@ int main(int argc, char** argv)
   static char* options[] = {
     "consumer",
     "--no-defaults",
-    "--datadir=/tmp",
-    "--language=/home/markus/MaxScale_fork/rabbitmq_consumer/english",
+    "--datadir=./data",
+    "--language=./english",
     "--skip-innodb",
     "--default-storage-engine=myisam",
     NULL
