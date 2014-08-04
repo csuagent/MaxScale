@@ -235,8 +235,8 @@ int main(int argc, char** argv)
   static char* options[] = {
     "consumer",
     "--no-defaults",
-    "--datadir=./data",
-    "--language=./english",
+    "--datadir=.",
+    "--language=.",
     "--skip-innodb",
     "--default-storage-engine=myisam",
     NULL
