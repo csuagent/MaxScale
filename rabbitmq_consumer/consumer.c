@@ -227,6 +227,17 @@ int sendToServer(MYSQL* server, amqp_message_t* a, amqp_message_t* b){
   sprintf(rawmsg,"%.*s",(int)msg->body.len,(char *)msg->body.bytes);
   sprintf(rawrpl,"%.*s",(int)reply->body.len,(char *)reply->body.bytes);
   sprintf(rawtag,"%.*s",(int)msg->properties.correlation_id.len,(char *)msg->properties.correlation_id.bytes);
+  
+  char *ptr;
+  while((ptr = strchr(rawmsg,'\n'))){
+    *ptr = ' ';
+  }
+  while((ptr = strchr(rawrpl,'\n'))){
+    *ptr = ' ';
+  }
+  while((ptr = strchr(rawtag,'\n'))){
+    *ptr = ' ';
+  }
 
   mysql_real_escape_string(server,clnmsg,rawmsg,strnlen(rawmsg,msg->body.len + 1));
   mysql_real_escape_string(server,clnrpl,rawrpl,strnlen(rawrpl,reply->body.len + 1));
