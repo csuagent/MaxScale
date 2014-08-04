@@ -7,6 +7,7 @@
 #include <amqp_tcp_socket.h>
 #include <amqp.h>
 #include <amqp_framing.h>
+#include <mysql.h>
 
 typedef struct delivery_t
 {
@@ -68,9 +69,95 @@ int isPair(amqp_message_t* a, amqp_message_t* b)
 		 b->properties.correlation_id.bytes,
 		 keylen) == 0 ? 1 : 0;
 }
-int sendToServer(amqp_message_t* a, amqp_message_t* b){
+
+int connectToServer(MYSQL* server)
+{
+
+  
+  mysql_init(server);
+  mysql_options(server,MYSQL_READ_DEFAULT_GROUP,"client");
+  mysql_options(server,MYSQL_OPT_GUESS_CONNECTION,0);
+
+  MYSQL* result =  mysql_real_connect(server,
+				      "127.0.0.1",
+				      "maxuser",
+				      "maxpwd",
+				      NULL,
+				      4006,
+				      NULL,
+				      0);
+ 
+  
+  if(result==NULL){
+    printf("Error: Could not connect to MySQL sever: %s\n",mysql_error(server));
+    return 0;
+  }
+
+  
+  char *qstr = calloc(1024,sizeof(char));
+  int bsz = 1024;
+  
+  if(!qstr){
+    printf( "Fatal Error: Cannot allocate enough memory.\n");
+    return 0;
+  }
+
+
+  /**Connection ok, check that the database and table exist*/
+
+  MYSQL_RES *res;
+  res = mysql_list_dbs(server,c_inst->dbname);
+  if(!mysql_fetch_row(res)){
+
+    memset(qstr,0,bsz);
+    sprintf(qstr,"CREATE DATABASE %s;",c_inst->dbname);
+    mysql_query(server,qstr);  
+    memset(qstr,0,bsz);
+    sprintf(qstr,"USE %s;",c_inst->dbname);
+    mysql_query(server,qstr);  
+    memset(qstr,0,bsz);
+    sprintf(qstr,"CREATE TABLE pairs (query VARCHAR(2048), reply VARCHAR(2048), tag VARCHAR(64));");
+    mysql_query(server,qstr);
+    mysql_free_result(res);
+ 
+  }else{
+
+    mysql_free_result(res);
+
+    memset(qstr,0,bsz);
+    sprintf(qstr,"USE %s;",c_inst->dbname);
+    mysql_query(server,qstr);  
+
+    memset(qstr,0,bsz);
+    sprintf(qstr,"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '%s' AND table_name = '%s'; ",
+	    c_inst->dbname, "pairs");
+    if(mysql_query(server,qstr)){
+      printf("Error: Could not send query MySQL sever: %s\n",mysql_error(server));
+    }
+    res = mysql_store_result(server);
+    if(!mysql_fetch_row(res)){
+
+      memset(qstr,0,bsz);
+      sprintf(qstr,"CREATE TABLE pairs (query VARCHAR(2048), reply VARCHAR(2048), tag VARCHAR(64));");
+      mysql_query(server,qstr);
+    }
+
+  }
+
+  free(qstr);
+
+  return 1;
+}
+
+int sendToServer(MYSQL* server, amqp_message_t* a, amqp_message_t* b){
 
   amqp_message_t *msg, *reply;
+  char *qstr = calloc(2048,sizeof(char));
+
+  if(!qstr){
+    printf( "Fatal Error: Cannot allocate enough memory.\n");
+    return 0;
+  }
 
   if( a->properties.message_id.len == strlen("query") &&
       strncmp(a->properties.message_id.bytes,"query",
@@ -85,6 +172,22 @@ int sendToServer(amqp_message_t* a, amqp_message_t* b){
     reply = a;
 
   }
+  
+  sprintf(qstr,"INSERT INTO pairs VALUES ('%.*s','%.*s','%.*s');",
+	  (int)msg->body.len,
+	  (char *)msg->body.bytes,
+	  (int)reply->body.len,
+	  (char *)reply->body.bytes,
+	  (int)msg->properties.correlation_id.len,
+	  (char *)msg->properties.correlation_id.bytes);
+  
+  
+   if(mysql_query(server,qstr)){
+      printf("Could not send query to SQL server.\n");
+      free(qstr);
+      return 0;
+    }
+  
 
   printf("pair: %.*s\nquery: %.*s\nreply: %.*s\n",
 	 (int)msg->properties.correlation_id.len,
@@ -105,9 +208,23 @@ int main(int argc, char** argv)
   amqp_message_t *reply = NULL;
   amqp_frame_t frame;
   struct timeval timeout;
-  
+  MYSQL db_inst;
+
+  static char* options[] = {
+    "consumer",
+    "--no-defaults",
+    "--datadir=/tmp",
+    "--language=/home/markus/MaxScale_fork/rabbitmq_consumer/english",
+    "--skip-innodb",
+    "--default-storage-engine=myisam",
+    NULL
+  };
+
+  static char* groups[] = {"embedded","client",NULL};
+  int num_elem = (sizeof(options) / sizeof(char *)) - 1;
   timeout.tv_sec = 2;
   timeout.tv_usec = 0;
+
 
   if((c_inst = calloc(1,sizeof(CONSUMER))) == NULL){
     printf( "Fatal Error: Cannot allocate enough memory.\n");
@@ -119,6 +236,7 @@ int main(int argc, char** argv)
     printf( "Fatal Error: Error parsing configuration file!\n");
     goto fatal_error;
   }
+  
 
   /**Confirm that all parameters were in the configuration file*/
   if(!c_inst->hostname||!c_inst->vhost||!c_inst->user||
@@ -127,7 +245,10 @@ int main(int argc, char** argv)
     printf( "Fatal Error: Inadequate configuration file!\n");
     goto fatal_error;    
   }
-  
+
+  mysql_library_init(num_elem, options, groups);
+  connectToServer(&db_inst);
+
   if((conn = amqp_new_connection()) == NULL || 
      (socket = amqp_tcp_socket_new(conn)) == NULL){
     printf( "Fatal Error: Cannot create connection object or socket.\n");
@@ -214,7 +335,8 @@ int main(int argc, char** argv)
 	int was_paired = 0;
 	while(dlvr){
 	  if(isPair(dlvr->message,reply)){
-	    sendToServer(dlvr->message,reply);
+
+	    sendToServer(&db_inst, dlvr->message, reply);
 	    amqp_basic_ack(conn,channel,decoded->delivery_tag,0);
 	    amqp_basic_ack(conn,channel,dlvr->dtag,0);
 	    amqp_destroy_message(dlvr->message);
@@ -264,7 +386,9 @@ int main(int argc, char** argv)
 
 
  error:
-  
+
+  mysql_close(&db_inst);
+  mysql_library_end();
   if(c_inst && c_inst->query_stack){
 
     while(c_inst->query_stack){
@@ -281,6 +405,7 @@ int main(int argc, char** argv)
   amqp_destroy_connection(conn);
  fatal_error:
   if(c_inst){
+
     free(c_inst->hostname);
     free(c_inst->queue);
     free(c_inst->dbserver);
@@ -291,5 +416,7 @@ int main(int argc, char** argv)
     
   }
 
+  
+  
   return all_ok;
 }
