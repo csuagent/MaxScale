@@ -1,7 +1,7 @@
 INCPATH=/usr/include
 CC=gcc
 CFLAGS=-c -Wall -g -Iinih -I$(INCPATH) -I$(INCPATH)/mysql
-LDFLAGS=-lrabbitmq -lpthread -ldl -lz -lm -lmysqld
+LDFLAGS=-lrabbitmq -laio -lpthread -ldl -lz -lm -lmysqld
 SRCS= inih/ini.c consumer.c
 OBJ=$(SRCS:.c=.o)
 all:$(OBJ)

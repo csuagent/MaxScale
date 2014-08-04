@@ -79,11 +79,11 @@ int connectToServer(MYSQL* server)
   mysql_options(server,MYSQL_OPT_GUESS_CONNECTION,0);
 
   MYSQL* result =  mysql_real_connect(server,
-				      "127.0.0.1",
-				      "maxuser",
-				      "maxpwd",
+				      c_inst->dbserver,
+				      c_inst->dbuser,
+				      c_inst->dbpasswd,
 				      NULL,
-				      4006,
+				      c_inst->dbport,
 				      NULL,
 				      0);
  
@@ -152,10 +152,12 @@ int connectToServer(MYSQL* server)
 int sendToServer(MYSQL* server, amqp_message_t* a, amqp_message_t* b){
 
   amqp_message_t *msg, *reply;
-  char *qstr = calloc(2048,sizeof(char));
+  int buffsz = 2048;
+  char *qstr = calloc(buffsz,sizeof(char));
 
   if(!qstr){
     printf( "Fatal Error: Cannot allocate enough memory.\n");
+    free(qstr);
     return 0;
   }
 
@@ -173,6 +175,32 @@ int sendToServer(MYSQL* server, amqp_message_t* a, amqp_message_t* b){
 
   }
   
+
+  printf("pair: %.*s\nquery: %.*s\nreply: %.*s\n",
+	 (int)msg->properties.correlation_id.len,
+	 (char *)msg->properties.correlation_id.bytes,
+	 (int)msg->body.len,
+	 (char *)msg->body.bytes,
+	 (int)reply->body.len,
+	 (char *)reply->body.bytes);
+
+  if((int)msg->body.len +
+     (int)reply->body.len +
+     (int)msg->properties.correlation_id.len + 50 >= buffsz)
+{
+    char* tmp = calloc(buffsz*2,sizeof(char));
+    free(qstr);
+    if(tmp){
+      qstr = tmp;
+      buffsz *= 2;
+    }else{
+	printf( "Fatal Error: Cannot allocate enough memory.\n");
+	return 0;
+   
+    }
+
+  }
+  
   sprintf(qstr,"INSERT INTO pairs VALUES ('%.*s','%.*s','%.*s');",
 	  (int)msg->body.len,
 	  (char *)msg->body.bytes,
@@ -183,19 +211,13 @@ int sendToServer(MYSQL* server, amqp_message_t* a, amqp_message_t* b){
   
   
    if(mysql_query(server,qstr)){
-      printf("Could not send query to SQL server.\n");
+     printf("Could not send query to SQL server:%s\n",mysql_error(server));
       free(qstr);
       return 0;
     }
   
 
-  printf("pair: %.*s\nquery: %.*s\nreply: %.*s\n",
-	 (int)msg->properties.correlation_id.len,
-	 (char *)msg->properties.correlation_id.bytes,
-	 (int)msg->body.len,
-	 (char *)msg->body.bytes,
-	 (int)reply->body.len,
-	 (char *)reply->body.bytes);
+      free(qstr);
   return 1;
 }
 int main(int argc, char** argv)
