@@ -124,7 +124,9 @@ int connectToServer(MYSQL* server)
     sprintf(qstr,"CREATE DATABASE %s;",c_inst->dbname);
     mysql_query(server,qstr);  
 
-    mysql_change_user(server,c_inst->dbuser,c_inst->dbpasswd,c_inst->dbname);
+    memset(qstr,0,bsz);
+    sprintf(qstr,"USE %s;",c_inst->dbname);
+    mysql_query(server,qstr);  
     
     memset(qstr,0,bsz);
     sprintf(qstr,"CREATE TABLE pairs (query VARCHAR(2048), reply VARCHAR(2048), tag VARCHAR(64));");
@@ -135,7 +137,9 @@ int connectToServer(MYSQL* server)
 
     mysql_free_result(res);
 
-    mysql_change_user(server,c_inst->dbuser,c_inst->dbpasswd,c_inst->dbname);
+    memset(qstr,0,bsz);
+    sprintf(qstr,"USE %s;",c_inst->dbname);
+    mysql_query(server,qstr);  
     
     memset(qstr,0,bsz);
     sprintf(qstr,"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '%s' AND table_name = '%s'; ",
