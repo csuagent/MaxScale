@@ -77,7 +77,7 @@ int connectToServer(MYSQL* server)
   mysql_init(server);
 
   mysql_options(server,MYSQL_READ_DEFAULT_GROUP,"client");
-  mysql_options(server,MYSQL_OPT_GUESS_CONNECTION,0);
+  mysql_options(server,MYSQL_OPT_USE_REMOTE_CONNECTION,0);
   my_bool tr = 1;
   mysql_options(server,MYSQL_OPT_RECONNECT,&tr);
   
@@ -97,9 +97,9 @@ int connectToServer(MYSQL* server)
     return 0;
   }
 
-  
-  char *qstr = calloc(1024,sizeof(char));
   int bsz = 1024;
+  char *qstr = calloc(bsz,sizeof(char)),*clnstr = calloc(bsz*2+1,sizeof(char));
+
   
   if(!qstr){
     printf( "Fatal Error: Cannot allocate enough memory.\n");
@@ -122,15 +122,20 @@ int connectToServer(MYSQL* server)
 
     memset(qstr,0,bsz);
     sprintf(qstr,"CREATE DATABASE %s;",c_inst->dbname);
-    mysql_query(server,qstr);  
+    
+    mysql_real_escape_string(server,clnstr,qstr,strnlen(qstr,bsz));
+    mysql_query(server,clnstr);  
 
     memset(qstr,0,bsz);
     sprintf(qstr,"USE %s;",c_inst->dbname);
-    mysql_query(server,qstr);  
+    mysql_real_escape_string(server,clnstr,qstr,strnlen(qstr,bsz));
+    mysql_query(server,clnstr);
+
     
     memset(qstr,0,bsz);
     sprintf(qstr,"CREATE TABLE pairs (query VARCHAR(2048), reply VARCHAR(2048), tag VARCHAR(64));");
-    mysql_query(server,qstr);
+    mysql_real_escape_string(server,clnstr,qstr,strnlen(qstr,bsz));
+    mysql_query(server,clnstr);
     
  
   }else{
@@ -166,11 +171,12 @@ int sendToServer(MYSQL* server, amqp_message_t* a, amqp_message_t* b){
 
   amqp_message_t *msg, *reply;
   int buffsz = 2048;
-  char *qstr = calloc(buffsz,sizeof(char));
+  char *qstr = calloc(buffsz,sizeof(char)),*clnstr = calloc(buffsz*2+1,sizeof(char));
 
-  if(!qstr){
+  if(!qstr || !clnstr){
     printf( "Fatal Error: Cannot allocate enough memory.\n");
     free(qstr);
+    free(clnstr);
     return 0;
   }
 
@@ -201,15 +207,17 @@ int sendToServer(MYSQL* server, amqp_message_t* a, amqp_message_t* b){
      (int)reply->body.len +
      (int)msg->properties.correlation_id.len + 50 >= buffsz)
 {
-    char* tmp = calloc(buffsz*2,sizeof(char));
+  char *qtmp = calloc(buffsz*2,sizeof(char)),
+    *clntmp = calloc((buffsz*2)*2+1,sizeof(char));
     free(qstr);
-    if(tmp){
-      qstr = tmp;
+    free(clnstr);
+    if(qtmp && clntmp){
+      qstr = qtmp;
+      clnstr = clntmp;
       buffsz *= 2;
     }else{
 	printf( "Fatal Error: Cannot allocate enough memory.\n");
 	return 0;
-   
     }
 
   }
@@ -222,8 +230,9 @@ int sendToServer(MYSQL* server, amqp_message_t* a, amqp_message_t* b){
 	  (int)msg->properties.correlation_id.len,
 	  (char *)msg->properties.correlation_id.bytes);
   
+  mysql_real_escape_string(server,clnstr,qstr,strnlen(qstr,buffsz));
   
-   if(mysql_query(server,qstr)){
+   if(mysql_query(server,clnstr)){
      printf("Could not send query to SQL server:%s\n",mysql_error(server));
       free(qstr);
       return 0;
@@ -231,6 +240,7 @@ int sendToServer(MYSQL* server, amqp_message_t* a, amqp_message_t* b){
   
 
       free(qstr);
+      free(clnstr);
   return 1;
 }
 int main(int argc, char** argv)
