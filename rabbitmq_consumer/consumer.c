@@ -58,6 +58,7 @@ int handler(void* user, const char* section, const char* name,
 
   return 1;
 }
+
 int isPair(amqp_message_t* a, amqp_message_t* b)
 {
   int keylen = a->properties.correlation_id.len >=
@@ -98,7 +99,7 @@ int connectToServer(MYSQL* server)
   }
 
   int bsz = 1024;
-  char *qstr = calloc(bsz,sizeof(char)),*clnstr = calloc(bsz*2+1,sizeof(char));
+  char *qstr = calloc(bsz,sizeof(char));
 
   
   if(!qstr){
@@ -123,19 +124,17 @@ int connectToServer(MYSQL* server)
     memset(qstr,0,bsz);
     sprintf(qstr,"CREATE DATABASE %s;",c_inst->dbname);
     
-    mysql_real_escape_string(server,clnstr,qstr,strnlen(qstr,bsz));
-    mysql_query(server,clnstr);  
+    mysql_real_escape_string(server,qstr,qstr,strnlen(qstr,bsz));
+    mysql_query(server,qstr);  
 
     memset(qstr,0,bsz);
     sprintf(qstr,"USE %s;",c_inst->dbname);
-    mysql_real_escape_string(server,clnstr,qstr,strnlen(qstr,bsz));
-    mysql_query(server,clnstr);
+    mysql_query(server,qstr);
 
     
     memset(qstr,0,bsz);
     sprintf(qstr,"CREATE TABLE pairs (query VARCHAR(2048), reply VARCHAR(2048), tag VARCHAR(64));");
-    mysql_real_escape_string(server,clnstr,qstr,strnlen(qstr,bsz));
-    mysql_query(server,clnstr);
+    mysql_query(server,qstr);
     
  
   }else{
@@ -144,7 +143,7 @@ int connectToServer(MYSQL* server)
 
     memset(qstr,0,bsz);
     sprintf(qstr,"USE %s;",c_inst->dbname);
-    mysql_query(server,qstr);  
+    mysql_query(server,qstr);
     
     memset(qstr,0,bsz);
     sprintf(qstr,"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '%s' AND table_name = '%s'; ",
@@ -163,7 +162,6 @@ int connectToServer(MYSQL* server)
   }
 
   free(qstr);
-
   return 1;
 }
 
@@ -171,12 +169,11 @@ int sendToServer(MYSQL* server, amqp_message_t* a, amqp_message_t* b){
 
   amqp_message_t *msg, *reply;
   int buffsz = 2048;
-  char *qstr = calloc(buffsz,sizeof(char)),*clnstr = calloc(buffsz*2+1,sizeof(char));
+  char *qstr = calloc(buffsz,sizeof(char));
 
-  if(!qstr || !clnstr){
+  if(!qstr){
     printf( "Fatal Error: Cannot allocate enough memory.\n");
     free(qstr);
-    free(clnstr);
     return 0;
   }
 
@@ -207,13 +204,11 @@ int sendToServer(MYSQL* server, amqp_message_t* a, amqp_message_t* b){
      (int)reply->body.len +
      (int)msg->properties.correlation_id.len + 50 >= buffsz)
 {
-  char *qtmp = calloc(buffsz*2,sizeof(char)),
-    *clntmp = calloc((buffsz*2)*2+1,sizeof(char));
+  char *qtmp = calloc(buffsz*2,sizeof(char));
     free(qstr);
-    free(clnstr);
-    if(qtmp && clntmp){
+
+    if(qtmp){
       qstr = qtmp;
-      clnstr = clntmp;
       buffsz *= 2;
     }else{
 	printf( "Fatal Error: Cannot allocate enough memory.\n");
@@ -222,25 +217,39 @@ int sendToServer(MYSQL* server, amqp_message_t* a, amqp_message_t* b){
 
   }
   
-  sprintf(qstr,"INSERT INTO pairs VALUES ('%.*s','%.*s','%.*s');",
-	  (int)msg->body.len,
-	  (char *)msg->body.bytes,
-	  (int)reply->body.len,
-	  (char *)reply->body.bytes,
-	  (int)msg->properties.correlation_id.len,
-	  (char *)msg->properties.correlation_id.bytes);
+  char *rawmsg = calloc((msg->body.len + 1),sizeof(char)),
+    *clnmsg = calloc(((msg->body.len + 1)*2+1),sizeof(char)),
+    *rawrpl = calloc((reply->body.len + 1),sizeof(char)),
+    *clnrpl = calloc(((reply->body.len + 1)*2+1),sizeof(char)),
+    *rawtag = calloc((msg->properties.correlation_id.len + 1),sizeof(char)),
+    *clntag = calloc(((msg->properties.correlation_id.len + 1)*2+1),sizeof(char));
+
+  sprintf(rawmsg,"%.*s",(int)msg->body.len,(char *)msg->body.bytes);
+  sprintf(rawrpl,"%.*s",(int)reply->body.len,(char *)reply->body.bytes);
+  sprintf(rawtag,"%.*s",(int)msg->properties.correlation_id.len,(char *)msg->properties.correlation_id.bytes);
+
+  mysql_real_escape_string(server,clnmsg,rawmsg,strnlen(rawmsg,msg->body.len + 1));
+  mysql_real_escape_string(server,clnrpl,rawrpl,strnlen(rawrpl,reply->body.len + 1));
+  mysql_real_escape_string(server,clntag,rawtag,strnlen(rawtag,msg->properties.correlation_id.len + 1));
+	  
   
-  mysql_real_escape_string(server,clnstr,qstr,strnlen(qstr,buffsz));
+
+  sprintf(qstr,"INSERT INTO pairs VALUES ('%s','%s','%s');",clnmsg,clnrpl,clntag);
   
-   if(mysql_query(server,clnstr)){
+  free(rawmsg);
+  free(clnmsg);
+  free(rawrpl);
+  free(clnrpl);
+  free(rawtag);
+  free(clntag);
+  
+   if(mysql_query(server,qstr)){
      printf("Could not send query to SQL server:%s\n",mysql_error(server));
       free(qstr);
       return 0;
     }
   
-
-      free(qstr);
-      free(clnstr);
+   free(qstr);
   return 1;
 }
 int main(int argc, char** argv)
@@ -270,6 +279,7 @@ int main(int argc, char** argv)
   timeout.tv_sec = 2;
   timeout.tv_usec = 0;
 
+  mysql_library_init(num_elem, options, groups);
 
   if((c_inst = calloc(1,sizeof(CONSUMER))) == NULL){
     printf( "Fatal Error: Cannot allocate enough memory.\n");
@@ -281,7 +291,6 @@ int main(int argc, char** argv)
     printf( "Fatal Error: Error parsing configuration file!\n");
     goto fatal_error;
   }
-  
 
   /**Confirm that all parameters were in the configuration file*/
   if(!c_inst->hostname||!c_inst->vhost||!c_inst->user||
@@ -291,7 +300,6 @@ int main(int argc, char** argv)
     goto fatal_error;    
   }
 
-  mysql_library_init(num_elem, options, groups);
   connectToServer(&db_inst);
 
   if((conn = amqp_new_connection()) == NULL || 
