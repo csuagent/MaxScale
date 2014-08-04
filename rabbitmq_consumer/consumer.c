@@ -75,8 +75,12 @@ int connectToServer(MYSQL* server)
 
   
   mysql_init(server);
+
   mysql_options(server,MYSQL_READ_DEFAULT_GROUP,"client");
   mysql_options(server,MYSQL_OPT_GUESS_CONNECTION,0);
+  my_bool tr = 1;
+  mysql_options(server,MYSQL_OPT_RECONNECT,&tr);
+  
 
   MYSQL* result =  mysql_real_connect(server,
 				      c_inst->dbserver,
@@ -89,7 +93,7 @@ int connectToServer(MYSQL* server)
  
   
   if(result==NULL){
-    printf("Error: Could not connect to MySQL sever: %s\n",mysql_error(server));
+    printf("Error: Could not connect to MySQL server: %s\n",mysql_error(server));
     return 0;
   }
 
@@ -106,33 +110,38 @@ int connectToServer(MYSQL* server)
   /**Connection ok, check that the database and table exist*/
 
   MYSQL_RES *res;
-  res = mysql_list_dbs(server,c_inst->dbname);
+
+  if((res = mysql_list_dbs(server,c_inst->dbname)) == NULL){
+    printf("Error: Could not connect to MySQL server: %s\n",mysql_error(server));
+    return 0;
+  }
+
   if(!mysql_fetch_row(res)){
+
+    mysql_free_result(res);
 
     memset(qstr,0,bsz);
     sprintf(qstr,"CREATE DATABASE %s;",c_inst->dbname);
     mysql_query(server,qstr);  
-    memset(qstr,0,bsz);
-    sprintf(qstr,"USE %s;",c_inst->dbname);
-    mysql_query(server,qstr);  
+
+    mysql_change_user(server,c_inst->dbuser,c_inst->dbpasswd,c_inst->dbname);
+    
     memset(qstr,0,bsz);
     sprintf(qstr,"CREATE TABLE pairs (query VARCHAR(2048), reply VARCHAR(2048), tag VARCHAR(64));");
     mysql_query(server,qstr);
-    mysql_free_result(res);
+    
  
   }else{
 
     mysql_free_result(res);
 
-    memset(qstr,0,bsz);
-    sprintf(qstr,"USE %s;",c_inst->dbname);
-    mysql_query(server,qstr);  
-
+    mysql_change_user(server,c_inst->dbuser,c_inst->dbpasswd,c_inst->dbname);
+    
     memset(qstr,0,bsz);
     sprintf(qstr,"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '%s' AND table_name = '%s'; ",
 	    c_inst->dbname, "pairs");
     if(mysql_query(server,qstr)){
-      printf("Error: Could not send query MySQL sever: %s\n",mysql_error(server));
+      printf("Error: Could not send query MySQL server: %s\n",mysql_error(server));
     }
     res = mysql_store_result(server);
     if(!mysql_fetch_row(res)){

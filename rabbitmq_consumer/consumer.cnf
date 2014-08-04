@@ -21,6 +21,6 @@ passwd=guest
 queue=q1
 dbserver=127.0.0.1
 dbport=3002
-dbname=testi
+dbname=mq_matches
 dbuser=maxuser
 dbpasswd=maxpwd
