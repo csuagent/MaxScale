@@ -24,6 +24,15 @@ typedef struct consumer_t
 }CONSUMER;
 
 static CONSUMER* c_inst;
+static char* DB_TABLE = "CREATE TABLE pairs (tag VARCHAR(64) PRIMARY KEY NOT NULL, query VARCHAR(2048), reply VARCHAR(2048), date_in TIMESTAMP NOT NULL, date_out TIMESTAMP NOT NULL);";
+static char* DB_INSERT = "INSERT INTO pairs(tag, query, date_in, date_out) VALUES ('%s','%s','%s','0');";
+static char* DB_UPDATE = "UPDATE pairs SET reply='%s', date_out='%s' WHERE tag='%s';";
+
+/**Queries to test query matching*/
+static char* DB_COUNT_CREATE = "INSERT INTO query_count(query, count) VALUES ('%s','1');";
+static char* DB_COUNT_INCREASE = "UPDATE query_count SET count=count+1 WHERE query='%s'";
+static char* DB_COUNT_TABLE = "CREATE TABLE query_count (query VARCHAR(2048) PRIMARY KEY NOT NULL, count INT NOT NULL);";
+
 
 int handler(void* user, const char* section, const char* name,
 	    const char* value)
@@ -123,8 +132,6 @@ int connectToServer(MYSQL* server)
 
     memset(qstr,0,bsz);
     sprintf(qstr,"CREATE DATABASE %s;",c_inst->dbname);
-    
-    mysql_real_escape_string(server,qstr,qstr,strnlen(qstr,bsz));
     mysql_query(server,qstr);  
 
     memset(qstr,0,bsz);
@@ -133,9 +140,10 @@ int connectToServer(MYSQL* server)
 
     
     memset(qstr,0,bsz);
-    sprintf(qstr,"CREATE TABLE pairs (query VARCHAR(2048), reply VARCHAR(2048), tag VARCHAR(64));");
-    mysql_query(server,qstr);
-    
+    sprintf(qstr,DB_TABLE);
+    if(mysql_query(server,qstr)){
+      printf("Error: Could not send query MySQL server: %s\n",mysql_error(server));
+    }
  
   }else{
 
@@ -146,23 +154,91 @@ int connectToServer(MYSQL* server)
     mysql_query(server,qstr);
     
     memset(qstr,0,bsz);
-    sprintf(qstr,"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '%s' AND table_name = '%s'; ",
+    sprintf(qstr,"SELECT TABLE_NAME FROM information_schema.tables WHERE TABLE_SCHEMA = '%s' AND TABLE_NAME = '%s'; ",
 	    c_inst->dbname, "pairs");
     if(mysql_query(server,qstr)){
       printf("Error: Could not send query MySQL server: %s\n",mysql_error(server));
     }
     res = mysql_store_result(server);
-    if(!mysql_fetch_row(res)){
+    MYSQL_ROW row = (mysql_fetch_row(res));
+    if(row  == NULL){
 
       memset(qstr,0,bsz);
-      sprintf(qstr,"CREATE TABLE pairs (query VARCHAR(2048), reply VARCHAR(2048), tag VARCHAR(64));");
+      sprintf(qstr,DB_TABLE);
       mysql_query(server,qstr);
     }
+
+    mysql_free_result(res);
 
   }
 
   free(qstr);
   return 1;
+}
+
+int sendMessage(MYSQL* server, amqp_message_t* msg)
+{
+  int buffsz = (int)((msg->body.len + 1)*2+1) + 
+    (int)((msg->properties.correlation_id.len + 1)*2+1) + 
+    strlen(DB_INSERT),
+    rval = 0;
+  char *qstr = calloc(buffsz,sizeof(char)),
+    *rawmsg = calloc((msg->body.len + 1),sizeof(char)),
+    *clnmsg = calloc(((msg->body.len + 1)*2+1),sizeof(char)),
+    *rawdate = calloc((msg->body.len + 1),sizeof(char)),
+    *clndate = calloc(((msg->body.len + 1)*2+1),sizeof(char)),
+    *rawtag = calloc((msg->properties.correlation_id.len + 1),sizeof(char)),
+    *clntag = calloc(((msg->properties.correlation_id.len + 1)*2+1),sizeof(char));
+
+
+  
+  sprintf(qstr,"%.*s",(int)msg->body.len,(char *)msg->body.bytes);
+  char *ptr = strtok(qstr,"|");
+  sprintf(rawdate,"%s",ptr);
+  ptr = strtok(NULL,"\n\0");
+  sprintf(rawmsg,"%s",ptr);
+  sprintf(rawtag,"%.*s",(int)msg->properties.correlation_id.len,(char *)msg->properties.correlation_id.bytes);
+  memset(qstr,0,buffsz);
+ 
+  mysql_real_escape_string(server,clnmsg,rawmsg,strnlen(rawmsg,msg->body.len + 1));
+  mysql_real_escape_string(server,clndate,rawdate,strnlen(rawdate,msg->body.len + 1));
+  mysql_real_escape_string(server,clntag,rawtag,strnlen(rawtag,msg->properties.correlation_id.len + 1));
+	  
+  if(strncmp(msg->properties.message_id.bytes,
+	     "query",msg->properties.message_id.len) == 0)
+    {
+
+      sprintf(qstr,DB_INSERT,clntag,clnmsg,clndate);
+
+    }else if(strncmp(msg->properties.message_id.bytes,
+		     "reply",msg->properties.message_id.len) == 0){
+
+    sprintf(qstr,DB_UPDATE,clnmsg,clndate,clntag);
+
+  }else{
+    rval = 1;
+    goto cleanup;
+}
+  
+
+  if(mysql_query(server,qstr)){
+    printf("Could not send query to SQL server:%s\n",mysql_error(server));
+    rval = 1;
+    goto cleanup;
+  }
+
+
+
+ cleanup:
+  free(qstr);
+  free(rawmsg);
+  free(clnmsg);
+  free(rawdate);
+  free(clndate);
+  free(rawtag);
+  free(clntag);
+  
+  return rval;
 }
 
 int sendToServer(MYSQL* server, amqp_message_t* a, amqp_message_t* b){
@@ -245,8 +321,7 @@ int sendToServer(MYSQL* server, amqp_message_t* a, amqp_message_t* b){
 	  
   
 
-  sprintf(qstr,"INSERT INTO pairs VALUES ('%s','%s','%s');",clnmsg,clnrpl,clntag);
-  
+  sprintf(qstr,"INSERT INTO pairs VALUES ('%s','%s','%s');",clnmsg,clnrpl,clntag); 
   free(rawmsg);
   free(clnmsg);
   free(rawrpl);
@@ -320,14 +395,14 @@ int main(int argc, char** argv)
   }
   
   if(amqp_socket_open(socket, c_inst->hostname, c_inst->port)){
-    printf( "Error: Cannot open socket.\n");
+    printf( "RabbitMQ Error: Cannot open socket.\n");
     goto error;
   }
   
   ret = amqp_login(conn, c_inst->vhost, 0, 131072, 0, AMQP_SASL_METHOD_PLAIN, c_inst->user, c_inst->passwd);
 
   if(ret.reply_type != AMQP_RESPONSE_NORMAL){
-    printf( "Error: Cannot login to server.\n");
+    printf( "RabbitMQ Error: Cannot login to server.\n");
     goto error;
   }
 
@@ -335,7 +410,7 @@ int main(int argc, char** argv)
   ret = amqp_get_rpc_reply(conn);
 
   if(ret.reply_type != AMQP_RESPONSE_NORMAL){
-    printf( "Error: Cannot open channel.\n");
+    printf( "RabbitMQ Error: Cannot open channel.\n");
     goto error;
   }  
 
@@ -359,6 +434,7 @@ int main(int argc, char** argv)
       }
       
       continue;
+      
     }else{
       timeout.tv_sec = 2;
     }
@@ -369,79 +445,92 @@ int main(int argc, char** argv)
 	
       amqp_read_message(conn,channel,reply,0);
 
-      if(reply->properties.message_id.len > 0 &&
-	 strncmp(reply->properties.message_id.bytes,
-		 "query",reply->properties.message_id.len) == 0)
-	{
+      if(sendMessage(&db_inst,reply)){
 
-	  /**Found a query, store it*/
-	  DELIVERY* dlvr = calloc(1,sizeof(DELIVERY));
-
-	  if(dlvr){
-
-	    dlvr->dtag = decoded->delivery_tag;
-	    dlvr->message = reply;
-	    dlvr->next = c_inst->query_stack;
-	    if(c_inst->query_stack){
-	      c_inst->query_stack->prev = dlvr;
-	    }
-	    c_inst->query_stack = dlvr;
-	    reply = malloc(sizeof(amqp_message_t));
-	      
-	  }
-
-	}else if(reply->properties.message_id.len > 0 &&
-		 strncmp(reply->properties.message_id.bytes,
-			 "reply",reply->properties.message_id.len) == 0){
-
-	/**Found a reply, try to pair it*/
-	DELIVERY* dlvr = c_inst->query_stack;
-	int was_paired = 0;
-	while(dlvr){
-	  if(isPair(dlvr->message,reply)){
-
-	    sendToServer(&db_inst, dlvr->message, reply);
-	    amqp_basic_ack(conn,channel,decoded->delivery_tag,0);
-	    amqp_basic_ack(conn,channel,dlvr->dtag,0);
-	    amqp_destroy_message(dlvr->message);
-	    amqp_destroy_message(reply);
-
-	    if(dlvr->next){
-	      dlvr->next->prev = dlvr->prev;
-	    }
-	    if(dlvr->prev){
-	      dlvr->prev->next = dlvr->next;
-	    }
-
-	    if(dlvr == c_inst->query_stack){
-	      if(dlvr->next == NULL){
-		c_inst->query_stack = NULL;
-	      }else{
-		c_inst->query_stack = dlvr->next;
-	      }
-	      
-	    }
-
-	    free(dlvr->message);
-	    free(dlvr);
-	    was_paired = 1;
-	    dlvr = NULL;
-	  }else{
-	    dlvr = dlvr->next;
-	  }
-	}
-	if(!was_paired){
-	  amqp_basic_reject(conn,channel,decoded->delivery_tag,1);
-	  amqp_destroy_message(reply);
-	}
-	  
-      }else{ /**Something neither a query or a reply received, send it back*/
+	printf("RabbitMQ Error: Received malformed message.\n");
+	amqp_basic_reject(conn,channel,decoded->delivery_tag,1);	
 	amqp_destroy_message(reply);
-	amqp_basic_reject(conn,channel,decoded->delivery_tag,1);
+
+      }else{
+
+	amqp_basic_ack(conn,channel,decoded->delivery_tag,0);
+	amqp_destroy_message(reply);	
+
       }
       
+      /* if(reply->properties.message_id.len > 0 && */
+      /* 	 strncmp(reply->properties.message_id.bytes, */
+      /* 		 "query",reply->properties.message_id.len) == 0) */
+      /* 	{ */
+
+      /* 	  /\**Found a query, store it*\/ */
+      /* 	  DELIVERY* dlvr = calloc(1,sizeof(DELIVERY)); */
+
+      /* 	  if(dlvr){ */
+
+      /* 	    dlvr->dtag = decoded->delivery_tag; */
+      /* 	    dlvr->message = reply; */
+      /* 	    dlvr->next = c_inst->query_stack; */
+      /* 	    if(c_inst->query_stack){ */
+      /* 	      c_inst->query_stack->prev = dlvr; */
+      /* 	    } */
+      /* 	    c_inst->query_stack = dlvr; */
+      /* 	    reply = malloc(sizeof(amqp_message_t)); */
+	      
+      /* 	  } */
+
+      /* 	}else if(reply->properties.message_id.len > 0 && */
+      /* 		 strncmp(reply->properties.message_id.bytes, */
+      /* 			 "reply",reply->properties.message_id.len) == 0){ */
+
+      /* 	/\**Found a reply, try to pair it*\/ */
+      /* 	DELIVERY* dlvr = c_inst->query_stack; */
+      /* 	int was_paired = 0; */
+      /* 	while(dlvr){ */
+      /* 	  if(isPair(dlvr->message,reply)){ */
+
+      /* 	    sendToServer(&db_inst, dlvr->message, reply); */
+      /* 	    amqp_basic_ack(conn,channel,decoded->delivery_tag,0); */
+      /* 	    amqp_basic_ack(conn,channel,dlvr->dtag,0); */
+      /* 	    amqp_destroy_message(dlvr->message); */
+      /* 	    amqp_destroy_message(reply); */
+
+      /* 	    if(dlvr->next){ */
+      /* 	      dlvr->next->prev = dlvr->prev; */
+      /* 	    } */
+      /* 	    if(dlvr->prev){ */
+      /* 	      dlvr->prev->next = dlvr->next; */
+      /* 	    } */
+
+      /* 	    if(dlvr == c_inst->query_stack){ */
+      /* 	      if(dlvr->next == NULL){ */
+      /* 		c_inst->query_stack = NULL; */
+      /* 	      }else{ */
+      /* 		c_inst->query_stack = dlvr->next; */
+      /* 	      } */
+	      
+      /* 	    } */
+
+      /* 	    free(dlvr->message); */
+      /* 	    free(dlvr); */
+      /* 	    was_paired = 1; */
+      /* 	    dlvr = NULL; */
+      /* 	  }else{ */
+      /* 	    dlvr = dlvr->next; */
+      /* 	  } */
+      /* 	} */
+      /* 	if(!was_paired){ */
+      /* 	  amqp_basic_reject(conn,channel,decoded->delivery_tag,1); */
+      /* 	  amqp_destroy_message(reply); */
+      /* 	} */
+	  
+      /* }else{ /\**Something neither a query or a reply received, send it back*\/ */
+      /* 	amqp_destroy_message(reply); */
+      /* 	amqp_basic_reject(conn,channel,decoded->delivery_tag,1); */
+      /* } */
+      
     }else{
-      printf("Received method from server: %s\n",amqp_method_name(frame.payload.method.id));
+      printf("RabbitMQ Error: Received method from server: %s\n",amqp_method_name(frame.payload.method.id));
       all_ok = 0;
       goto error;
     }

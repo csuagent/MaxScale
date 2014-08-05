@@ -605,7 +605,7 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
       prop.message_id = amqp_cstring_bytes("query");
 
       memset(t_buf,0,128);      
-      sprintf(t_buf, "%lu:",(unsigned long)time(NULL));
+      sprintf(t_buf, "%lu|",(unsigned long)time(NULL));
 
       int qlen = length + strnlen(t_buf,128);
       if((combined = malloc((qlen+1)*sizeof(char))) == NULL){
@@ -801,7 +801,7 @@ static int clientReply(FILTER* instance, void *session, GWBUF *reply)
       }
 
       memset(t_buf,0,128);
-      sprintf(t_buf,"%lu:",(unsigned long)time(NULL));
+      sprintf(t_buf,"%lu|",(unsigned long)time(NULL));
       
       
       memcpy(combined + offset,t_buf,strnlen(t_buf,40));
