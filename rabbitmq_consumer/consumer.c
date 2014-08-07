@@ -25,8 +25,8 @@ typedef struct consumer_t
 
 static CONSUMER* c_inst;
 static char* DB_DATABASE = "CREATE DATABASE IF NOT EXISTS %s;";
-static char* DB_TABLE = "CREATE TABLE IF NOT EXISTS pairs (tag VARCHAR(64) PRIMARY KEY NOT NULL, query VARCHAR(2048), reply VARCHAR(2048), date_in TIMESTAMP NOT NULL, date_out TIMESTAMP NOT NULL)";
-static char* DB_INSERT = "INSERT INTO pairs(tag, query, date_in, date_out) VALUES ('%s','%s',FROM_UNIXTIME(%s),FROM_UNIXTIME(0))";
+static char* DB_TABLE = "CREATE TABLE IF NOT EXISTS pairs (tag VARCHAR(64) PRIMARY KEY NOT NULL, query VARCHAR(2048), reply VARCHAR(2048), date_in DATETIME NOT NULL, date_out DATETIME NOT NULL)";
+static char* DB_INSERT = "INSERT INTO pairs(tag, query, date_in,date_out) VALUES ('%s','%s',FROM_UNIXTIME(%s),FROM_UNIXTIME(0))";
 static char* DB_UPDATE = "UPDATE pairs SET reply='%s', date_out=FROM_UNIXTIME(%s) WHERE tag='%s'";
 
 /**Queries to test query matching*/
