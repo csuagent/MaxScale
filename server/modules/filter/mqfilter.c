@@ -550,7 +550,7 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
   MQ_SESSION	*my_session = (MQ_SESSION *)session;
   MQ_INSTANCE	*my_instance = (MQ_INSTANCE *)instance;
   char		*ptr, t_buf[128], *combined;
-  int		length, err_code;
+  int		length, err_code = AMQP_STATUS_OK;
   amqp_basic_properties_t prop;
   spinlock_acquire(my_instance->rconn_lock);
   if(my_instance->conn_stat != AMQP_STATUS_OK){
