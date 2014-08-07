@@ -24,9 +24,9 @@ typedef struct consumer_t
 }CONSUMER;
 
 static CONSUMER* c_inst;
-static char* DB_TABLE = "CREATE TABLE pairs (tag VARCHAR(64) PRIMARY KEY NOT NULL, query VARCHAR(2048), reply VARCHAR(2048), date_in TIMESTAMP NOT NULL, date_out TIMESTAMP NOT NULL);";
-static char* DB_INSERT = "INSERT INTO pairs(tag, query, date_in, date_out) VALUES ('%s','%s','%s','0');";
-static char* DB_UPDATE = "UPDATE pairs SET reply='%s', date_out='%s' WHERE tag='%s';";
+static char* DB_TABLE = "CREATE TABLE pairs (tag VARCHAR(64) PRIMARY KEY NOT NULL, query VARCHAR(2048), reply VARCHAR(2048), date_in TIMESTAMP NOT NULL, date_out TIMESTAMP NOT NULL)";
+static char* DB_INSERT = "INSERT INTO pairs(tag, query, date_in, date_out) VALUES ('%s','%s',FROM_UNIXTIME(%s),FROM_UNIXTIME(0))";
+static char* DB_UPDATE = "UPDATE pairs SET reply='%s', date_out=FROM_UNIXTIME(%s) WHERE tag='%s'";
 
 /**Queries to test query matching*/
 static char* DB_COUNT_CREATE = "INSERT INTO query_count(query, count) VALUES ('%s','1');";
@@ -232,7 +232,9 @@ int sendMessage(MYSQL* server, amqp_message_t* msg)
     rval = 1;
     goto cleanup;
   }
-
+  if(mysql_affected_rows(server) == 0){
+    printf("Could not update\n",mysql_error(server));
+  }
 
 
  cleanup:
