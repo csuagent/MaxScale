@@ -196,6 +196,11 @@ int sendMessage(MYSQL* server, amqp_message_t* msg)
   char *ptr = strtok(qstr,"|");
   sprintf(rawdate,"%s",ptr);
   ptr = strtok(NULL,"\n\0");
+  if(ptr == NULL){
+    printf("Message content not valid.\n");
+    rval = 1;
+    goto cleanup;
+  }
   sprintf(rawmsg,"%s",ptr);
   sprintf(rawtag,"%.*s",(int)msg->properties.correlation_id.len,(char *)msg->properties.correlation_id.bytes);
   memset(qstr,0,buffsz);
