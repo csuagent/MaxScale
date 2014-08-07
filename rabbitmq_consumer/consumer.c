@@ -193,6 +193,7 @@ int sendMessage(MYSQL* server, amqp_message_t* msg)
 
   
   sprintf(qstr,"%.*s",(int)msg->body.len,(char *)msg->body.bytes);
+  printf("Received: %s\n",qstr);
   char *ptr = strtok(qstr,"|");
   sprintf(rawdate,"%s",ptr);
   ptr = strtok(NULL,"\n\0");
@@ -453,7 +454,7 @@ int main(int argc, char** argv)
       if(sendMessage(&db_inst,reply)){
 
 	printf("RabbitMQ Error: Received malformed message.\n");
-	amqp_basic_reject(conn,channel,decoded->delivery_tag,1);	
+	amqp_basic_reject(conn,channel,decoded->delivery_tag,0);	
 	amqp_destroy_message(reply);
 
       }else{
