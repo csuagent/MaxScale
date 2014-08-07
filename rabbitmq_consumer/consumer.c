@@ -24,7 +24,8 @@ typedef struct consumer_t
 }CONSUMER;
 
 static CONSUMER* c_inst;
-static char* DB_TABLE = "CREATE TABLE pairs (tag VARCHAR(64) PRIMARY KEY NOT NULL, query VARCHAR(2048), reply VARCHAR(2048), date_in TIMESTAMP NOT NULL, date_out TIMESTAMP NOT NULL)";
+static char* DB_DATABASE = "CREATE DATABASE IF NOT EXISTS %s;";
+static char* DB_TABLE = "CREATE TABLE IF NOT EXISTS pairs (tag VARCHAR(64) PRIMARY KEY NOT NULL, query VARCHAR(2048), reply VARCHAR(2048), date_in TIMESTAMP NOT NULL, date_out TIMESTAMP NOT NULL)";
 static char* DB_INSERT = "INSERT INTO pairs(tag, query, date_in, date_out) VALUES ('%s','%s',FROM_UNIXTIME(%s),FROM_UNIXTIME(0))";
 static char* DB_UPDATE = "UPDATE pairs SET reply='%s', date_out=FROM_UNIXTIME(%s) WHERE tag='%s'";
 
@@ -119,6 +120,26 @@ int connectToServer(MYSQL* server)
 
   /**Connection ok, check that the database and table exist*/
 
+  memset(qstr,0,bsz);
+  sprintf(qstr,DB_DATABASE,c_inst->dbname);
+  if(mysql_query(server,qstr)){
+    printf("Error: Could not send query MySQL server: %s\n",mysql_error(server));
+  }
+  memset(qstr,0,bsz);
+  sprintf(qstr,"USE %s;",c_inst->dbname);
+  if(mysql_query(server,qstr)){
+    printf("Error: Could not send query MySQL server: %s\n",mysql_error(server));
+  }
+  
+  memset(qstr,0,bsz);
+  sprintf(qstr,DB_TABLE);
+  if(mysql_query(server,qstr)){
+    printf("Error: Could not send query MySQL server: %s\n",mysql_error(server));
+  }
+  
+  
+  
+  /*
   MYSQL_RES *res;
 
   if((res = mysql_list_dbs(server,c_inst->dbname)) == NULL){
@@ -131,7 +152,7 @@ int connectToServer(MYSQL* server)
     mysql_free_result(res);
 
     memset(qstr,0,bsz);
-    sprintf(qstr,"CREATE DATABASE %s;",c_inst->dbname);
+    sprintf(qstr,DB_DATABASE,c_inst->dbname);
     mysql_query(server,qstr);  
 
     memset(qstr,0,bsz);
@@ -170,7 +191,7 @@ int connectToServer(MYSQL* server)
 
     mysql_free_result(res);
 
-  }
+    }*/
 
   free(qstr);
   return 1;
@@ -233,7 +254,7 @@ int sendMessage(MYSQL* server, amqp_message_t* msg)
     goto cleanup;
   }
   if(mysql_affected_rows(server) == 0){
-    printf("Could not update\n",mysql_error(server));
+    printf("Could not update reply data to SQL server.\n");
   }
 
 
