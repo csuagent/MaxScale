@@ -977,9 +977,11 @@ static bool get_dcb(
                                                 b->backend_server->unique_name, 
                                                 MIN(strlen(b->backend_server->unique_name), PATH_MAX)) == 0) &&
                                         master_host != NULL && 
+#if 0
                                         (max_rlag == MAX_RLAG_UNDEFINED ||
                                         (b->backend_server->rlag != MAX_RLAG_NOT_AVAILABLE &&
                                         b->backend_server->rlag <= max_rlag)) &&
+#endif
                                         (SERVER_IS_SLAVE(b->backend_server) || 
                                         SERVER_IS_RELAY_SERVER(b->backend_server) ||
                                         SERVER_IS_MASTER(b->backend_server)))
@@ -1122,10 +1124,18 @@ static route_target_t get_route_target (
                                 }
                                 else
                                 {
+                                        LOGIF(LT, (skygw_log_write(
+                                                LOGFILE_TRACE,
+                                                "Error : Unknown hint parameter "
+                                                "'%s' when 'max_slave_replication_lag' "
+                                                "was expected.",
+                                                (char *)hint->data)));
                                         LOGIF(LE, (skygw_log_write_flush(
                                                 LOGFILE_ERROR,
-                                                "Warning : Unknown routing parameter hint : %s",
-                                                (char *)hint->data)));
+                                                "Error : Unknown hint parameter "
+                                                "'%s' when 'max_slave_replication_lag' "
+                                                "was expected.",
+                                                (char *)hint->data)));                                        
                                 }
                         }
                         hint = hint->next;
@@ -1272,6 +1282,8 @@ static int routeQuery(
                         break;
                         
                 case MYSQL_COM_STMT_EXECUTE:
+                        /** Parsing is not needed for this type of packet */
+#if defined(NOT_USED)
                         plainsqlbuf = gwbuf_clone_transform(querybuf, 
                                                             GWBUF_TYPE_PLAINSQL);
                         len = GWBUF_LENGTH(plainsqlbuf);
@@ -1280,7 +1292,8 @@ static int routeQuery(
                         memcpy(querystr, startpos, len);
                         memset(&querystr[len], 0, 1);
                         qtype = skygw_query_classifier_get_type(querystr, 0, &mysql);
-                        qtype |= QUERY_TYPE_EXEC_STMT;
+#endif
+                        qtype = QUERY_TYPE_EXEC_STMT;
                         break;
                         
                 case MYSQL_COM_SHUTDOWN:       /**< 8 where should shutdown be routed ? */
@@ -1414,7 +1427,7 @@ static int routeQuery(
                                                         "max_slave_replication_lag",
                                                         strlen("max_slave_replication_lag")) == 0))
                                         {
-                                                int val = (int) strtol((char *)hint->data, 
+                                                int val = (int) strtol((char *)hint->value, 
                                                                        (char **)NULL, 10);
                                                 
                                                 if (val != 0 || errno == 0)
@@ -1702,7 +1715,6 @@ static void clientReply (
                 if (LOG_IS_ENABLED(LOGFILE_ERROR) && 
                         MYSQL_IS_ERROR_PACKET(((uint8_t *)GWBUF_DATA(writebuf))))
                 {
-                        SESSION* ses = backend_dcb->session;
                         uint8_t* buf = 
                                 (uint8_t *)GWBUF_DATA((scur->scmd_cur_cmd->my_sescmd_buf));
                         size_t   len = MYSQL_GET_PACKET_LEN(buf);
@@ -2146,7 +2158,7 @@ static bool select_connect_backend_servers(
                                                 backend_ref[i].bref_state = 0;
                                                 bref_set_state(&backend_ref[i], 
                                                                BREF_IN_USE);
-                                                /** 
+                                               /** 
                                                 * Increase backend connection counter.
                                                 * Server's stats are _increased_ in 
                                                 * dcb.c:dcb_alloc !
@@ -2184,7 +2196,7 @@ static bool select_connect_backend_servers(
                                         session,
                                         b->backend_server->protocol);
                                 
-                                if (backend_ref[i].bref_dcb != NULL) 
+                                if (backend_ref[i].bref_dcb != NULL)
                                 {
                                         master_connected = true;
                                         /** 
@@ -2201,8 +2213,6 @@ static bool select_connect_backend_servers(
                                         bref_set_state(&backend_ref[i], 
                                                        BREF_IN_USE);
                                         /** Increase backend connection counters */
-                                        atomic_add(&b->backend_server->stats.n_current, 1);
-                                        atomic_add(&b->backend_server->stats.n_connections, 1);
                                         atomic_add(&b->backend_conn_count, 1);
                                 }
                                 else
@@ -2301,15 +2311,11 @@ static bool select_connect_backend_servers(
                                 BACKEND* b = backend_ref[i].bref_backend;
 
                                 if (BREF_IS_IN_USE((&backend_ref[i])))
-                                {
-                                        backend_type_t btype = BACKEND_TYPE(b);
-                                        
+                                {                                        
                                         LOGIF(LT, (skygw_log_write(
                                                 LOGFILE_TRACE,
                                                 "Selected %s in \t%s:%d",
-                                                (btype == BE_MASTER ? "master" : 
-                                                (btype == BE_SLAVE ? "slave" : 
-                                                "unknown node type")),
+                                                STRSRVSTATUS(b->backend_server),
                                                 b->backend_server->name,
                                                 b->backend_server->port)));
                                 }
@@ -2832,6 +2838,7 @@ static bool execute_sescmd_in_backend(
                         pthread_self(),
                         dcb->fd,
                         STRPACKETTYPE(cmd))));
+                gwbuf_free(tmpbuf);
         }
 #endif /*< SS_DEBUG */
         switch (scur->scmd_cur_cmd->my_sescmd_packet_type) {
@@ -3373,6 +3380,11 @@ static bool handle_error_reply_client(
                 CHK_DCB(client_dcb);
                 client_dcb->func.write(client_dcb, errmsg);
         }
+        else
+        {
+                while ((errmsg=gwbuf_consume(errmsg, GWBUF_LENGTH(errmsg))) != NULL)
+                        ;
+        }                
         succp = false; /** false because new servers aren's selected. */
 
         return succp;
@@ -3426,6 +3438,11 @@ static bool handle_error_new_connection(
                 client_dcb = ses->client;
                 client_dcb->func.write(client_dcb, errmsg);
                 bref_clear_state(bref, BREF_WAITING_RESULT);
+        }
+        else 
+        {
+                while ((errmsg=gwbuf_consume(errmsg, GWBUF_LENGTH(errmsg))) != NULL)
+                        ;
         }
         bref_clear_state(bref, BREF_IN_USE);
         bref_set_state(bref, BREF_CLOSED);

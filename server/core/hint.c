@@ -56,7 +56,7 @@ HINT	*nlhead = NULL, *nltail = NULL, *ptr1, *ptr2;
 		if (ptr1->value)
 			ptr2->value = strdup(ptr1->value);
 		else
-			ptr2->data = NULL;
+			ptr2->value = NULL;
 		ptr2->next = NULL;
 		if (nltail)
 		{
@@ -115,7 +115,7 @@ HINT	*hint;
 		return head;
 	hint->next = head;
 	hint->type = HINT_PARAMETER;
-	hint->data = strdup(pname);
+	hint->data = pname;
 	hint->value = strdup(value);
 	return hint;
 }

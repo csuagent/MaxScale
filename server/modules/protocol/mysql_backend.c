@@ -422,7 +422,6 @@ static int gw_read_backend_event(DCB *dcb) {
 		GWBUF         *read_buffer = NULL;
 		ROUTER_OBJECT *router = NULL;
 		ROUTER        *router_instance = NULL;
-		void          *rsession = NULL;
 		SESSION       *session = dcb->session;
                 int           nbytes_read = 0;
                 
@@ -502,7 +501,10 @@ static int gw_read_backend_event(DCB *dcb) {
                                 goto return_rc;
                         }
                 }
-                /** If protocol has command set it is session command */
+                /** 
+                 * If protocol has session command set, concatenate whole 
+                 * response into one buffer.
+                 */
                 if (protocol_get_srv_command((MySQLProtocol *)dcb->protocol, false) != 
                         MYSQL_COM_UNDEFINED)
                 {
@@ -784,7 +786,7 @@ static int gw_error_backend_event(DCB *dcb)
          * closed by router and COM_QUIT sent or there was an error which
          * have already been handled.
          */
-        if (dcb->session != DCB_STATE_POLLING)
+        if (dcb->state != DCB_STATE_POLLING)
         {
                 return 1;
         }
@@ -993,6 +995,8 @@ gw_backend_close(DCB *dcb)
 
         /** Send COM_QUIT to the backend being closed */
         mysql_send_com_quit(dcb, 0, quitbuf);
+        
+        mysql_protocol_done(dcb);
 
         if (session != NULL && session->state == SESSION_STATE_STOPPING)
         {
