@@ -64,7 +64,7 @@ MODULE_INFO 	info = {
   "A RabbitMQ query logging filter"
 };
 
-static char *version_str = "V1.0.0";
+static char *version_str = "V1.0.2";
 static int uid_gen;
 
 /*
@@ -253,6 +253,8 @@ init_conn(MQ_INSTANCE *my_instance)
     goto cleanup;
   }
 
+  amqp_exchange_delete(my_instance->conn,my_instance->channel,amqp_cstring_bytes(my_instance->exchange),0);
+
   amqp_exchange_declare(my_instance->conn,my_instance->channel,
 			amqp_cstring_bytes(my_instance->exchange),
 			amqp_cstring_bytes(my_instance->exchange_type),
@@ -266,6 +268,9 @@ init_conn(MQ_INSTANCE *my_instance)
   }
 
   if(my_instance->queue){
+
+    
+
     amqp_queue_declare(my_instance->conn,my_instance->channel,
 		       amqp_cstring_bytes(my_instance->queue),
 		       0, 1, 0, 0,
