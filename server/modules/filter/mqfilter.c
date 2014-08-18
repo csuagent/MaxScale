@@ -253,18 +253,43 @@ init_conn(MQ_INSTANCE *my_instance)
     goto cleanup;
   }
 
-  amqp_exchange_delete(my_instance->conn,my_instance->channel,amqp_cstring_bytes(my_instance->exchange),0);
-
   amqp_exchange_declare(my_instance->conn,my_instance->channel,
 			amqp_cstring_bytes(my_instance->exchange),
 			amqp_cstring_bytes(my_instance->exchange_type),
 			0, 1,
 			amqp_empty_table);
+
   reply = amqp_get_rpc_reply(my_instance->conn);  
+
   if(reply.reply_type != AMQP_RESPONSE_NORMAL){
     skygw_log_write(LOGFILE_ERROR,
-			  "Error : Exchange declaration failed.");
-    goto cleanup;
+		    "Error : Exchange declaration failed,trying to redeclare the exchange.");
+    if(reply.reply_type == AMQP_RESPONSE_SERVER_EXCEPTION){
+      int method_ok = AMQP_STATUS_OK;
+      if(reply.reply.id == AMQP_CHANNEL_CLOSE_METHOD){
+	amqp_channel_close_ok_t cc_ok;
+	method_ok = amqp_send_method(my_instance->conn,my_instance->channel,AMQP_CHANNEL_CLOSE_OK_METHOD,NULL);
+      }else if(reply.reply.id == AMQP_CONNECTION_CLOSE_METHOD){
+	amqp_connection_close_ok_t cc_ok;
+	method_ok = amqp_send_method(my_instance->conn,my_instance->channel,AMQP_CONNECTION_CLOSE_OK_METHOD,NULL);
+      }
+      
+      my_instance->channel++;
+      amqp_channel_open(my_instance->conn,my_instance->channel);
+    
+      amqp_exchange_delete(my_instance->conn,my_instance->channel,amqp_cstring_bytes(my_instance->exchange),0);
+      amqp_exchange_declare(my_instance->conn,my_instance->channel,
+			    amqp_cstring_bytes(my_instance->exchange),
+			    amqp_cstring_bytes(my_instance->exchange_type),
+			    0, 1,
+			    amqp_empty_table);
+      reply = amqp_get_rpc_reply(my_instance->conn);  
+    }
+    if(reply.reply_type != AMQP_RESPONSE_NORMAL){
+      skygw_log_write(LOGFILE_ERROR,
+		      "Error : Exchange redeclaration failed.");
+      goto cleanup;
+    }
   }
 
   if(my_instance->queue){
