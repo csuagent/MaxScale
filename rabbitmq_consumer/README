@@ -1,0 +1,12 @@
+This program requires the librabbitmq and libmysqld libraries.
+
+Building with CMake:
+'cmake .'
+'make'
+
+Building with the provided Makefile:
+'make'
+
+Building RPMs:
+'cmake .'
+'make package'
