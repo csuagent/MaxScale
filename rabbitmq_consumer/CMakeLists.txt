@@ -6,7 +6,7 @@ set(LIB_SEARCH_DIRS /usr/lib /usr/lib64 /usr/local/lib /usr/local/lib64)
 set(HDR_SEARCH_DIRS /usr/include /usr/local/include /usr/include/mysql /usr/local/include/mysql)
 
 find_path(MYSQL_INCLUDE_DIRS mysql.h ${HDR_SEARCH_DIRS})
-find_library(MYSQL_LIBRARIES NAMES mysqld PATHS ${LIB_SEARCH_DIRS})
+find_library(MYSQL_LIBRARIES NAMES mysqlclient PATHS ${LIB_SEARCH_DIRS})
 find_library(RABBITMQ_C_LIBRARIES NAMES rabbitmq PATHS ${LIB_SEARCH_DIRS})
 
 include_directories(${MYSQL_INCLUDE_DIRS})
@@ -19,12 +19,13 @@ link_directories(${CMAKE_SOURCE_DIR}/inih)
 if(RABBITMQ_C_LIBRARIES AND MYSQL_LIBRARIES AND MYSQL_INCLUDE_DIRS)
 
 add_executable (consumer consumer.c ${MYSQL_LIBRARIES} ${RABBITMQ_C_LIBRARIES})
-target_link_libraries(consumer mysqld)
+target_link_libraries(consumer mysqlclient)
 target_link_libraries(consumer rabbitmq)
 target_link_libraries(consumer inih)
 install(TARGETS consumer DESTINATION bin)
 else(RABBITMQ_C_LIBRARIES AND MYSQL_LIBRARIES AND MYSQL_INCLUDE_DIRS)
 message(FATAL_ERROR "Error: Can not find requred libraries: libmysqld, librabbitmq.")
+
 endif(RABBITMQ_C_LIBRARIES AND MYSQL_LIBRARIES AND MYSQL_INCLUDE_DIRS)
 
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "RabbitMQ Consumer Client")

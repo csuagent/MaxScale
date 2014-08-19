@@ -323,22 +323,8 @@ int main(int argc, char** argv)
   struct timeval timeout;
   MYSQL db_inst;
 
-  static char* options[] = {
-    "consumer",
-    "--no-defaults",
-    "--datadir=.",
-    "--language=.",
-    "--skip-innodb",
-    "--default-storage-engine=myisam",
-    NULL
-  };
-
-  static char* groups[] = {"embedded","client",NULL};
-  int num_elem = (sizeof(options) / sizeof(char *)) - 1;
   timeout.tv_sec = 2;
   timeout.tv_usec = 0;
-
-  mysql_library_init(num_elem, options, groups);
 
   if((c_inst = calloc(1,sizeof(CONSUMER))) == NULL){
     printf( "Fatal Error: Cannot allocate enough memory.\n");
