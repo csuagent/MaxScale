@@ -1,7 +1,12 @@
-B1;2802;0cINCPATH=/usr/include
+ifndef LIBPATH
+LIBPATH=/usr/lib64
+endif
+ifndef INCPATH
+INCPATH=/usr/include
+endif
 CC=gcc
 CFLAGS=-c -Wall -g -Iinih -I$(INCPATH) -I$(INCPATH)/mysql
-LDFLAGS=-lrabbitmq -lmysqlclient
+LDFLAGS= -L$(LIBPATH) -lrabbitmq -lmysqlclient
 SRCS= inih/ini.c consumer.c
 OBJ=$(SRCS:.c=.o)
 all:$(OBJ)
