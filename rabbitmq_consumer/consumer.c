@@ -25,9 +25,10 @@ typedef struct consumer_t
 
 static CONSUMER* c_inst;
 static char* DB_DATABASE = "CREATE DATABASE IF NOT EXISTS %s;";
-static char* DB_TABLE = "CREATE TABLE IF NOT EXISTS pairs (tag VARCHAR(64) PRIMARY KEY NOT NULL, query VARCHAR(2048), reply VARCHAR(2048), date_in DATETIME NOT NULL, date_out DATETIME DEFAULT NULL)";
+static char* DB_TABLE = "CREATE TABLE IF NOT EXISTS pairs (tag VARCHAR(64) PRIMARY KEY NOT NULL, query VARCHAR(2048), reply VARCHAR(2048), date_in DATETIME NOT NULL, date_out DATETIME DEFAULT NULL, counter INT DEFAULT 1)";
 static char* DB_INSERT = "INSERT INTO pairs(tag, query, date_in) VALUES ('%s','%s',FROM_UNIXTIME(%s))";
 static char* DB_UPDATE = "UPDATE pairs SET reply='%s', date_out=FROM_UNIXTIME(%s) WHERE tag='%s'";
+static char* DB_INCREMENT = "UPDATE pairs SET counter = counter+1, date_out=FROM_UNIXTIME(%s) WHERE query='%s'";
 
 /**Queries to test query matching*/
 static char* DB_COUNT_CREATE = "INSERT INTO query_count(query, count) VALUES ('%s','1');";
@@ -178,29 +179,32 @@ int sendMessage(MYSQL* server, amqp_message_t* msg)
   if(strncmp(msg->properties.message_id.bytes,
 	     "query",msg->properties.message_id.len) == 0)
     {
+      
+      sprintf(qstr,DB_INCREMENT,clndate,clnmsg);
+      rval = mysql_query(server,qstr);
 
-      sprintf(qstr,DB_INSERT,clntag,clnmsg,clndate);
+      if(mysql_affected_rows(server) == 0){
+	memset(qstr,0,buffsz);
+	sprintf(qstr,DB_INSERT,clntag,clnmsg,clndate);
+	rval = mysql_query(server,qstr);
+      }
 
     }else if(strncmp(msg->properties.message_id.bytes,
 		     "reply",msg->properties.message_id.len) == 0){
 
     sprintf(qstr,DB_UPDATE,clnmsg,clndate,clntag);
+    rval = mysql_query(server,qstr);
 
   }else{
     rval = 1;
     goto cleanup;
-}
+  }
   
 
-  if(mysql_query(server,qstr)){
+  if(rval){
     printf("Could not send query to SQL server:%s\n",mysql_error(server));
-    rval = 1;
     goto cleanup;
   }
-  if(mysql_affected_rows(server) == 0){
-    printf("Could not update reply data to SQL server.\n");
-  }
-
 
  cleanup:
   free(qstr);
@@ -252,19 +256,19 @@ int sendToServer(MYSQL* server, amqp_message_t* a, amqp_message_t* b){
   if((int)msg->body.len +
      (int)reply->body.len +
      (int)msg->properties.correlation_id.len + 50 >= buffsz)
-{
-  char *qtmp = calloc(buffsz*2,sizeof(char));
-    free(qstr);
+    {
+      char *qtmp = calloc(buffsz*2,sizeof(char));
+      free(qstr);
 
-    if(qtmp){
-      qstr = qtmp;
-      buffsz *= 2;
-    }else{
+      if(qtmp){
+	qstr = qtmp;
+	buffsz *= 2;
+      }else{
 	printf( "Fatal Error: Cannot allocate enough memory.\n");
 	return 0;
-    }
+      }
 
-  }
+    }
   
   char *rawmsg = calloc((msg->body.len + 1),sizeof(char)),
     *clnmsg = calloc(((msg->body.len + 1)*2+1),sizeof(char)),
@@ -302,19 +306,19 @@ int sendToServer(MYSQL* server, amqp_message_t* a, amqp_message_t* b){
   free(rawtag);
   free(clntag);
   
-   if(mysql_query(server,qstr)){
-     printf("Could not send query to SQL server:%s\n",mysql_error(server));
-      free(qstr);
-      return 0;
-    }
+  if(mysql_query(server,qstr)){
+    printf("Could not send query to SQL server:%s\n",mysql_error(server));
+    free(qstr);
+    return 0;
+  }
   
-   free(qstr);
+  free(qstr);
   return 1;
 }
 int main(int argc, char** argv)
 {
   const char* fname = "consumer.cnf";
-  int channel = 1, all_ok = 1, status = AMQP_STATUS_OK;
+  int channel = 1, all_ok = 1, status = AMQP_STATUS_OK, cnfnlen;
   amqp_socket_t *socket = NULL;
   amqp_connection_state_t conn;
   amqp_rpc_reply_t ret;
@@ -322,6 +326,30 @@ int main(int argc, char** argv)
   amqp_frame_t frame;
   struct timeval timeout;
   MYSQL db_inst;
+  char ch, *cnfname, *cnfpath = NULL;
+
+  while((ch = getopt(argc,argv,"c:"))!= -1){
+    switch(ch){
+    case 'c':
+      cnfnlen = strlen(optarg);
+      cnfpath = strdup(optarg);
+      break;
+    default:
+
+      break;
+    }
+  }
+
+  cnfname = calloc(cnfnlen + strlen(fname) + 1,sizeof(char));
+
+  if(cnfpath){
+    strcpy(cnfname,cnfpath);
+    if(cnfpath[cnfnlen-1] != '/'){
+      strcat(cnfname,"/");
+    }
+  }
+
+  strcat(cnfname,fname);
 
   timeout.tv_sec = 2;
   timeout.tv_usec = 0;
@@ -332,7 +360,7 @@ int main(int argc, char** argv)
   }
 
   /**Parse the INI file*/
-  if(ini_parse(fname,handler,NULL) < 0){
+  if(ini_parse(cnfname,handler,NULL) < 0){
     printf( "Fatal Error: Error parsing configuration file!\n");
     goto fatal_error;
   }

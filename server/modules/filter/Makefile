@@ -21,15 +21,16 @@
 include ../../../build_gateway.inc
 
 LOGPATH := $(ROOT_PATH)/log_manager
+QCLASSPATH := $(ROOT_PATH)/query_classifier
 UTILSPATH := $(ROOT_PATH)/utils
 
 CC=cc
-CFLAGS=-c -fPIC -I/usr/include -I../include -I../../include -I$(LOGPATH) \
-	-I$(UTILSPATH) -Wall -g
+CFLAGS=-c -fPIC -I/usr/include -I../include -I../../include -I$(LOGPATH) -I$(QCLASSPATH) \
+	-I$(UTILSPATH) -I$(MYSQL_ROOT) -Wall -g
 
 include ../../../makefile.inc
 
-LDFLAGS=-shared  -L$(LOGPATH) -Wl,-rpath,$(DEST)/lib \
+LDFLAGS=-shared  -L$(LOGPATH) -L$(QCLASSPATH) -Wl,-rpath,$(DEST)/lib \
 	-Wl,-rpath,$(LOGPATH) -Wl,-rpath,$(UTILSPATH)
 
 TESTSRCS=testfilter.c

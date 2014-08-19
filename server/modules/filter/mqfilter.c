@@ -56,6 +56,7 @@
 #include <amqp_tcp_socket.h>
 #include <amqp_ssl_socket.h>
 #include <log_manager.h>
+#include <query_classifier.h>
 #include <spinlock.h>
 MODULE_INFO 	info = {
   MODULE_API_FILTER,
@@ -265,13 +266,10 @@ init_conn(MQ_INSTANCE *my_instance)
     skygw_log_write(LOGFILE_ERROR,
 		    "Error : Exchange declaration failed,trying to redeclare the exchange.");
     if(reply.reply_type == AMQP_RESPONSE_SERVER_EXCEPTION){
-      int method_ok = AMQP_STATUS_OK;
       if(reply.reply.id == AMQP_CHANNEL_CLOSE_METHOD){
-	amqp_channel_close_ok_t cc_ok;
-	method_ok = amqp_send_method(my_instance->conn,my_instance->channel,AMQP_CHANNEL_CLOSE_OK_METHOD,NULL);
+	amqp_send_method(my_instance->conn,my_instance->channel,AMQP_CHANNEL_CLOSE_OK_METHOD,NULL);
       }else if(reply.reply.id == AMQP_CONNECTION_CLOSE_METHOD){
-	amqp_connection_close_ok_t cc_ok;
-	method_ok = amqp_send_method(my_instance->conn,my_instance->channel,AMQP_CONNECTION_CLOSE_OK_METHOD,NULL);
+	amqp_send_method(my_instance->conn,my_instance->channel,AMQP_CONNECTION_CLOSE_OK_METHOD,NULL);
       }
       
       my_instance->channel++;
@@ -712,20 +710,31 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
       prop->correlation_id = amqp_cstring_bytes(my_session->uid);
       prop->message_id = amqp_cstring_bytes("query");
     }
-      
+
+    MYSQL* mysql;
+    
+    char *std_q = calloc(length + 1,sizeof(char)), *canon_q;
+    memcpy(std_q,ptr,length);
+    skygw_query_classifier_get_type(std_q,0,&mysql);
+    if((canon_q = skygw_get_canonical(mysql,std_q)) == NULL){
+      canon_q = strdup(std_q);
+    }
+    skygw_query_classifier_free(mysql);
+ 
     memset(t_buf,0,128);      
     sprintf(t_buf, "%lu|",(unsigned long)time(NULL));
 
-    int qlen = length + strnlen(t_buf,128);
+    int qlen = strnlen(canon_q,length) + strnlen(t_buf,128);
     if((combined = malloc((qlen+1)*sizeof(char))) == NULL){
       skygw_log_write_flush(LOGFILE_ERROR,
 			    "Error : Out of memory");
     }
     strcpy(combined,t_buf);
-    strncat(combined,ptr,length);
+    strncat(combined,canon_q,length);
       
     pushMessage(my_instance,prop,combined);
-
+    free(std_q);
+    free(canon_q);
   }
   
   /** Pass the query downstream */
