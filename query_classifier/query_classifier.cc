@@ -412,7 +412,7 @@ static skygw_query_type_t resolve_query_type(
         
         ss_info_dassert(thd != NULL, ("thd is NULL\n"));
 
-        force_data_modify_op_replication = FALSE;        
+        force_data_modify_op_replication = FALSE;
         lex = thd->lex;
         
         /** SELECT ..INTO variable|OUTFILE|DUMPFILE */
@@ -815,4 +815,70 @@ char* skygw_query_classifier_get_stmtname(
 {
         return ((THD *)(mysql->thd))->lex->prepared_stmt_name.str;
         
+}
+
+/**
+ * Replace user-provided literals with question marks. Return a copy of the
+ * querystr with replacements.
+ * 
+ * @param mysql         Database pointer
+ * @param querystr      Query string
+ * 
+ * @return Copy of querystr where literals are replaces with question marks or
+ * NULL if querystr is NULL, thread context or lex are NULL or if replacement
+ * function fails.
+ * 
+ * Replaced literal types are STRING_ITEM,INT_ITEM,DECIMAL_ITEM,REAL_ITEM,
+ * VARBIN_ITEM,NULL_ITEM
+ */
+char* skygw_get_canonical(
+        MYSQL* mysql, 
+        char*  querystr)
+{
+        THD*  thd;
+        LEX*  lex;
+        bool  found = false;
+        char* newstr = NULL;
+        Item* item;              
+        
+        ss_dassert(mysql != NULL && querystr != NULL);
+        
+        if (querystr == NULL || 
+                mysql == NULL || 
+                (thd = (THD *)mysql->thd) == NULL ||
+                (lex = thd->lex) == NULL)
+        {
+                ss_dassert(thd != NULL && lex != NULL);
+                goto retblock;
+        }
+        
+        for (item=thd->free_list; item != NULL; item=item->next) 
+        {
+                Item::Type itype;
+                
+                itype = item->type();
+                
+                if (itype == Item::STRING_ITEM || 
+                        itype == Item::INT_ITEM ||
+                        itype == Item::DECIMAL_ITEM ||
+                        itype == Item::REAL_ITEM ||
+                        itype == Item::VARBIN_ITEM ||
+                        itype == Item::NULL_ITEM)
+                {
+                        if (!found)
+                        {
+                                newstr = replace_str(querystr, item->name, "?");
+                                found = true;
+                        }
+                        else 
+                        {
+                                char* prevstr = newstr;
+                                
+                                newstr = replace_str(prevstr, item->name, "?");
+                                free(prevstr);
+                        }
+                }
+        } /*< for */
+retblock:
+        return newstr;
 }
