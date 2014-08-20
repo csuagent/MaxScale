@@ -9,6 +9,17 @@
 #include <amqp_framing.h>
 #include <mysql.h>
 
+
+#ifdef CONFIG_IN_ETC
+#define CONFIG 1
+#else
+#define CONFIG 0
+#endif
+
+#ifndef CONSUMER_CONFIG_PREFIX
+#define CONSUMER_CONFIG_PREFIX "/usr/share/consumer"
+#endif
+
 typedef struct delivery_t
 {
   uint64_t dtag;
@@ -29,12 +40,6 @@ static char* DB_TABLE = "CREATE TABLE IF NOT EXISTS pairs (tag VARCHAR(64) PRIMA
 static char* DB_INSERT = "INSERT INTO pairs(tag, query, date_in) VALUES ('%s','%s',FROM_UNIXTIME(%s))";
 static char* DB_UPDATE = "UPDATE pairs SET reply='%s', date_out=FROM_UNIXTIME(%s) WHERE tag='%s'";
 static char* DB_INCREMENT = "UPDATE pairs SET counter = counter+1, date_out=FROM_UNIXTIME(%s) WHERE query='%s'";
-
-/**Queries to test query matching*/
-static char* DB_COUNT_CREATE = "INSERT INTO query_count(query, count) VALUES ('%s','1');";
-static char* DB_COUNT_INCREASE = "UPDATE query_count SET count=count+1 WHERE query='%s'";
-static char* DB_COUNT_TABLE = "CREATE TABLE query_count (query VARCHAR(2048) PRIMARY KEY NOT NULL, count INT NOT NULL);";
-
 
 int handler(void* user, const char* section, const char* name,
 	    const char* value)
@@ -317,7 +322,6 @@ int sendToServer(MYSQL* server, amqp_message_t* a, amqp_message_t* b){
 }
 int main(int argc, char** argv)
 {
-  const char* fname = "consumer.cnf";
   int channel = 1, all_ok = 1, status = AMQP_STATUS_OK, cnfnlen;
   amqp_socket_t *socket = NULL;
   amqp_connection_state_t conn;
@@ -327,6 +331,8 @@ int main(int argc, char** argv)
   struct timeval timeout;
   MYSQL db_inst;
   char ch, *cnfname, *cnfpath = NULL;
+  static const char* fname = "consumer.cnf";
+  static const char* fprefix = CONSUMER_CONFIG_PREFIX;
 
   while((ch = getopt(argc,argv,"c:"))!= -1){
     switch(ch){
@@ -343,12 +349,24 @@ int main(int argc, char** argv)
   cnfname = calloc(cnfnlen + strlen(fname) + 1,sizeof(char));
 
   if(cnfpath){
+
+    /**Config file path as argument*/
     strcpy(cnfname,cnfpath);
     if(cnfpath[cnfnlen-1] != '/'){
       strcat(cnfname,"/");
     }
-  }
 
+  }else if(CONFIG){
+
+    /**Config file location was set at install*/
+    strcat(cnfname,fprefix);
+    if(cnfname[strlen(cnfname) - 1] != '/'){
+      strcat(cnfname,"/");
+    }    
+
+  }
+  
+  
   strcat(cnfname,fname);
 
   timeout.tv_sec = 2;
@@ -361,8 +379,13 @@ int main(int argc, char** argv)
 
   /**Parse the INI file*/
   if(ini_parse(cnfname,handler,NULL) < 0){
-    printf( "Fatal Error: Error parsing configuration file!\n");
+    
+    /**Try to parse a config in the same directory*/
+    if(ini_parse(fname,handler,NULL) < 0){
+      printf( "Fatal Error: Error parsing configuration file!\n");
     goto fatal_error;
+
+    }
   }
 
   /**Confirm that all parameters were in the configuration file*/

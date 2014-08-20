@@ -123,7 +123,7 @@ typedef struct {
   char	*exchange_type;
   char	*key;
   char	*queue;
-  int	use_ssl;
+  bool	use_ssl;
   char	*ssl_CA_cert;
   char	*ssl_client_cert;
   char 	*ssl_client_key;
@@ -150,7 +150,7 @@ typedef struct {
   char*		uid; /**Unique identifier used to tag messages*/
   DOWNSTREAM	down;
   UPSTREAM	up;
-  unsigned int was_query; /**True if the previous routeQuery call had valid content*/
+  bool was_query; /**True if the previous routeQuery call had valid content*/
 } MQ_SESSION;
 
 /**
@@ -413,7 +413,9 @@ createInstance(char **options, FILTER_PARAMETER **params)
       if(my_instance->ssl_client_cert != NULL &&
 	 my_instance->ssl_client_key != NULL &&
 	 my_instance->ssl_CA_cert != NULL){
-	my_instance->use_ssl = 1;
+	my_instance->use_ssl = true;
+      }else{
+	my_instance->use_ssl = false;
       }
       
       if(my_instance->use_ssl){
@@ -580,7 +582,7 @@ newSession(FILTER *instance, SESSION *session)
   
   if ((my_session = calloc(1, sizeof(MQ_SESSION))) != NULL){
 
-    my_session->was_query = 0;
+    my_session->was_query = false;
     my_session->uid = NULL;
 
   }
@@ -676,7 +678,8 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
 {
   MQ_SESSION	*my_session = (MQ_SESSION *)session;
   MQ_INSTANCE	*my_instance = (MQ_INSTANCE *)instance;
-  char		*ptr, t_buf[128], *combined;
+  char		*ptr, t_buf[128], *combined,*canon_q;
+  bool		success = false;
   int		length;
   amqp_basic_properties_t *prop;
   
@@ -698,7 +701,7 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
 
   if(modutil_extract_SQL(queue, &ptr, &length)){
 
-    my_session->was_query = 1;
+    my_session->was_query = true;
       
     if((prop = malloc(sizeof(amqp_basic_properties_t)))){
       prop->_flags = AMQP_BASIC_CONTENT_TYPE_FLAG |
@@ -711,15 +714,18 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
       prop->message_id = amqp_cstring_bytes("query");
     }
 
-    MYSQL* mysql;
-    
-    char *std_q = calloc(length + 1,sizeof(char)), *canon_q;
-    memcpy(std_q,ptr,length);
-    skygw_query_classifier_get_type(std_q,0,&mysql);
-    if((canon_q = skygw_get_canonical(mysql,std_q)) == NULL){
-      canon_q = strdup(std_q);
+    if (!query_is_parsed(queue)){
+      success = parse_query(queue);
     }
-    skygw_query_classifier_free(mysql);
+
+    if(success){
+      
+      /**Try to convert to a canonical form and use the plain query if unsuccessful*/
+      if((canon_q = skygw_get_canonical(queue)) == NULL){
+	canon_q = strdup(queue->parsing_information_struct->plain_query_string);
+      }
+
+    }
  
     memset(t_buf,0,128);      
     sprintf(t_buf, "%lu|",(unsigned long)time(NULL));
@@ -733,7 +739,6 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
     strncat(combined,canon_q,length);
       
     pushMessage(my_instance,prop,combined);
-    free(std_q);
     free(canon_q);
   }
   
@@ -864,7 +869,7 @@ static int clientReply(FILTER* instance, void *session, GWBUF *reply)
 
     int packet_ok = 0, was_last = 0;
 
-    my_session->was_query = 0;
+    my_session->was_query = false;
 
     if(pkt_len > 0){
       if((prop = malloc(sizeof(amqp_basic_properties_t)))){
