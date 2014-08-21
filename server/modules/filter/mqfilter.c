@@ -679,7 +679,7 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
   MQ_SESSION	*my_session = (MQ_SESSION *)session;
   MQ_INSTANCE	*my_instance = (MQ_INSTANCE *)instance;
   char		*ptr, t_buf[128], *combined,*canon_q;
-  bool		success = false;
+  bool		success = true;
   int		length;
   amqp_basic_properties_t *prop;
   
@@ -722,7 +722,8 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
       
       /**Try to convert to a canonical form and use the plain query if unsuccessful*/
       if((canon_q = skygw_get_canonical(queue)) == NULL){
-	canon_q = strdup(queue->parsing_information_struct->plain_query_string);
+	parsing_info_t* pinfo = (parsing_info_t*)queue->gwbuf_parsing_info;
+	canon_q = strdup(pinfo->pi_query_plain_str);
       }
 
     }
