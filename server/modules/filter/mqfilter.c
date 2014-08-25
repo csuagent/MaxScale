@@ -28,6 +28,8 @@
  * By default this filter uses a TCP connection.
  *
  * The options for this filter are:
+ *
+ *	logging_trigger	Set the logging level
  * 	hostname	The server hostname where the messages are sent
  * 	port		Port to send the messages to
  * 	username	Server login username
@@ -41,6 +43,11 @@
  * 	ssl_client_cert Path to the client cerificate in PEM format
  * 	ssl_client_key	Path to the client public key in PEM format
  * 
+ * The logging trigger levels are:
+ *	all	Trigger on all statements
+ *	source	Trigger on statements originating from a particular source (database user and host combination)
+ *	schema	Trigger on a certain schema
+ *	object	Trigger on a particular database object (table or view)
  */
 #include <stdio.h>
 #include <fcntl.h>
@@ -104,6 +111,16 @@ typedef struct mqmessage_t {
 }mqmessage;
 
 /**
+ *Logging trigger levels
+ */
+enum log_trigger_t{
+  TRG_ALL,
+  TRG_SOURCE,
+  TRG_SCHEMA,
+  TRG_OBJECT
+};
+
+/**
  * A instance structure, containing the hostname, login credentials,
  * virtual host location and the names of the exchange and the key.
  * Also contains the paths to the CA certificate and client certificate and key.
@@ -113,6 +130,7 @@ typedef struct mqmessage_t {
  * routing key named 'key'. Type of the exchange is 'direct' by default. 
  * 
  */
+
 typedef struct {
   int 	port; 
   char	*hostname; 
@@ -135,6 +153,7 @@ typedef struct {
   time_t last_rconn; /**last reconnect attempt*/
   SPINLOCK* rconn_lock;
   mqmessage* messages;
+  enum log_trigger_t triglvl;
 } MQ_INSTANCE;
 
 /**
@@ -385,6 +404,18 @@ createInstance(char **options, FILTER_PARAMETER **params)
 	  my_instance->ssl_CA_cert = strdup(params[i]->value);
 	}else if(!strcmp(params[i]->name,"exchange_type")){
 	  my_instance->exchange_type = strdup(params[i]->value);
+	}else if(!strcmp(params[i]->name,"logging_trigger")){
+	  
+	  if(!strcmp(params[i]->value,"source")){
+	    my_instance->triglvl = TRG_SOURCE;
+	  }else if(!strcmp(params[i]->value,"schema")){
+	    my_instance->triglvl = TRG_SCHEMA;
+	  }else if(!strcmp(params[i]->value,"object")){
+	    my_instance->triglvl = TRG_OBJECT;
+	  }else{
+	    my_instance->triglvl = TRG_ALL;
+	  }
+
 	}
       }
       
