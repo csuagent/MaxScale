@@ -48,6 +48,8 @@
  *	source	Trigger on statements originating from a particular source (database user and host combination)
  *	schema	Trigger on a certain schema
  *	object	Trigger on a particular database object (table or view)
+ *
+ * See the struct documentations for trigger parameters
  */
 #include <stdio.h>
 #include <fcntl.h>
@@ -65,6 +67,7 @@
 #include <log_manager.h>
 #include <query_classifier.h>
 #include <spinlock.h>
+#include <session.h>
 MODULE_INFO 	info = {
   MODULE_API_FILTER,
   MODULE_ALPHA_RELEASE,
@@ -121,6 +124,18 @@ enum log_trigger_t{
 };
 
 /**
+ * Source logging trigger
+ * 
+ * Trigger options:
+ *	trigger_level_source_user	Username to log
+ *	trigger_level_source_host	Hostname to log
+ */
+typedef struct source_trigger_t{
+  char* user;
+  char* host;
+}SRC_TRIG;
+
+/**
  * A instance structure, containing the hostname, login credentials,
  * virtual host location and the names of the exchange and the key.
  * Also contains the paths to the CA certificate and client certificate and key.
@@ -153,7 +168,8 @@ typedef struct {
   time_t last_rconn; /**last reconnect attempt*/
   SPINLOCK* rconn_lock;
   mqmessage* messages;
-  enum log_trigger_t triglvl;
+  enum log_trigger_t trgtype;
+  void* trgdata;
 } MQ_INSTANCE;
 
 /**
@@ -358,6 +374,7 @@ createInstance(char **options, FILTER_PARAMETER **params)
 {
   MQ_INSTANCE	*my_instance;
   
+  
   if ((my_instance = calloc(1, sizeof(MQ_INSTANCE)))&& 
       (my_instance->rconn_lock = malloc(sizeof(SPINLOCK))))
     {
@@ -374,8 +391,10 @@ createInstance(char **options, FILTER_PARAMETER **params)
       my_instance->conn_stat = AMQP_STATUS_OK;
       my_instance->rconn_intv = 1;
       my_instance->port = 5672;
+      
+      int paramcount = 0,parammax = 64,i = 0;
+      FILTER_PARAMETER** paramlist = malloc(sizeof(FILTER_PARAMETER*)*64);
 
-      int i;
       for(i = 0;params[i];i++){
 	if(!strcmp(params[i]->name,"hostname")){
 	  my_instance->hostname = strdup(params[i]->value);
@@ -395,29 +414,89 @@ createInstance(char **options, FILTER_PARAMETER **params)
 	  my_instance->queue = strdup(params[i]->value);
 	}
 	else if(!strcmp(params[i]->name,"ssl_client_certificate")){
+
 	  my_instance->ssl_client_cert = strdup(params[i]->value);
-	}
-	else if(!strcmp(params[i]->name,"ssl_client_key")){
+	
+	}else if(!strcmp(params[i]->name,"ssl_client_key")){
+
 	  my_instance->ssl_client_key = strdup(params[i]->value);
-	}
-	else if(!strcmp(params[i]->name,"ssl_CA_cert")){
+	}else if(!strcmp(params[i]->name,"ssl_CA_cert")){
+
 	  my_instance->ssl_CA_cert = strdup(params[i]->value);
+
 	}else if(!strcmp(params[i]->name,"exchange_type")){
+
 	  my_instance->exchange_type = strdup(params[i]->value);
+
 	}else if(!strcmp(params[i]->name,"logging_trigger")){
 	  
 	  if(!strcmp(params[i]->value,"source")){
-	    my_instance->triglvl = TRG_SOURCE;
+	    my_instance->trgtype = TRG_SOURCE;
 	  }else if(!strcmp(params[i]->value,"schema")){
-	    my_instance->triglvl = TRG_SCHEMA;
+	    my_instance->trgtype = TRG_SCHEMA;
 	  }else if(!strcmp(params[i]->value,"object")){
-	    my_instance->triglvl = TRG_OBJECT;
+	    my_instance->trgtype = TRG_OBJECT;
 	  }else{
-	    my_instance->triglvl = TRG_ALL;
+	    my_instance->trgtype = TRG_ALL;
 	  }
 
+	}else if(strstr(params[i]->name,"logging_trigger_")){
+
+	  if(paramcount < parammax){
+	    paramlist[paramcount] = malloc(sizeof(FILTER_PARAMETER));
+	    paramlist[paramcount]->name = strdup(params[i]->name);
+	    paramlist[paramcount]->value = strdup(params[i]->value);
+	    paramcount++;
+	  }	  
+	  
 	}
+
       }
+
+
+      void* trg = NULL;
+
+      switch(my_instance->trgtype){
+      case TRG_SOURCE:
+        trg = (void*)malloc(sizeof(SRC_TRIG));
+	((SRC_TRIG*)trg)->user = NULL;
+	((SRC_TRIG*)trg)->host = NULL;
+	my_instance->trgdata = trg;
+	break;
+      default: /**NULL is TRG_ALL*/
+	my_instance->trgdata = NULL;
+	break;
+      }
+      for(i = 0;i<paramcount;i++){
+	switch(my_instance->trgtype){
+
+	case TRG_SOURCE:
+
+	  if(!strcmp(paramlist[i]->name,"logging_trigger_source_user")){
+	    
+	    ((SRC_TRIG*)my_instance->trgdata)->user = strdup(paramlist[i]->value);
+
+	  }else if(!strcmp(paramlist[i]->name,"logging_trigger_source_host")){
+	    
+	    ((SRC_TRIG*)my_instance->trgdata)->host = strdup(paramlist[i]->value);
+
+	  }
+
+	  break;
+
+	default:
+
+	  break;
+
+	}
+	
+	free(paramlist[i]->name);
+	free(paramlist[i]->value);
+	free(paramlist[i]);
+	
+      }
+
+      free(paramlist);
       
       if(my_instance->hostname == NULL){
 	my_instance->hostname = strdup("localhost");	
@@ -455,6 +534,8 @@ createInstance(char **options, FILTER_PARAMETER **params)
       
       /**Connect to the server*/
       init_conn(my_instance);
+
+      
 
     }
   return (FILTER *)my_instance;
@@ -709,12 +790,33 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
 {
   MQ_SESSION	*my_session = (MQ_SESSION *)session;
   MQ_INSTANCE	*my_instance = (MQ_INSTANCE *)instance;
-  char		*ptr, t_buf[128], *combined,*canon_q;
+  char		*ptr, t_buf[128], *combined,*canon_q,*comp1,*comp2;
   bool		success = true;
   int		length;
   amqp_basic_properties_t *prop;
   
   if(modutil_is_SQL(queue)){
+
+    switch(my_instance->trgtype){
+
+    case TRG_SOURCE:
+      
+      if(session_isvalid(session)){
+	comp1 = ((SRC_TRIG*)my_instance->trgdata)->user;
+	if((comp2 = session_getUser(session))
+	   && strcmp(comp1,comp2)){
+	  goto skip_query;
+	}
+      }
+      break;
+
+    case TRG_ALL:
+    case TRG_SCHEMA:
+    case TRG_OBJECT:
+    default:
+      break;
+      
+    }
 
     if(my_session->uid == NULL){
 
@@ -775,6 +877,7 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
   }
   
   /** Pass the query downstream */
+ skip_query:
   return my_session->down.routeQuery(my_session->down.instance,
 				     my_session->down.session, queue);
 }
