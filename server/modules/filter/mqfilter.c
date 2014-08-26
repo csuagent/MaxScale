@@ -49,7 +49,7 @@
  *	schema	Trigger on a certain schema
  *	object	Trigger on a particular database object (table or view)
  *
- * See the struct documentations for trigger parameters
+ * See the individual struct documentations for logging trigger parameters
  */
 #include <stdio.h>
 #include <fcntl.h>
@@ -125,6 +125,8 @@ enum log_trigger_t{
 
 /**
  * Source logging trigger
+ *
+ * Log only those queries that come from a valid pair of username and hostname combinations
  * 
  * Trigger options:
  *	trigger_level_source_user	Username to log
@@ -185,7 +187,8 @@ typedef struct {
   char*		uid; /**Unique identifier used to tag messages*/
   DOWNSTREAM	down;
   UPSTREAM	up;
-  bool was_query; /**True if the previous routeQuery call had valid content*/
+  SESSION*	session;
+  bool		was_query; /**True if the previous routeQuery call had valid content*/
 } MQ_SESSION;
 
 /**
@@ -375,7 +378,7 @@ createInstance(char **options, FILTER_PARAMETER **params)
   MQ_INSTANCE	*my_instance;
   
   
-  if ((my_instance = calloc(1, sizeof(MQ_INSTANCE)))&& 
+ if ((my_instance = calloc(1, sizeof(MQ_INSTANCE)))&& 
       (my_instance->rconn_lock = malloc(sizeof(SPINLOCK))))
     {
       spinlock_init(my_instance->rconn_lock);
@@ -696,6 +699,7 @@ newSession(FILTER *instance, SESSION *session)
 
     my_session->was_query = false;
     my_session->uid = NULL;
+    my_session->session = session;
 
   }
 
@@ -790,8 +794,8 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
 {
   MQ_SESSION	*my_session = (MQ_SESSION *)session;
   MQ_INSTANCE	*my_instance = (MQ_INSTANCE *)instance;
-  char		*ptr, t_buf[128], *combined,*canon_q,*comp1,*comp2;
-  bool		success = true;
+  char		*ptr, t_buf[128], *combined,*canon_q,*myusr,*myhost,*sesshost,*sessusr;
+  bool		success = true, srcusr = false, srchost = false;
   int		length;
   amqp_basic_properties_t *prop;
   
@@ -801,11 +805,38 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
 
     case TRG_SOURCE:
       
-      if(session_isvalid(session)){
-	comp1 = ((SRC_TRIG*)my_instance->trgdata)->user;
-	if((comp2 = session_getUser(session))
-	   && strcmp(comp1,comp2)){
+      if(session_isvalid(my_session->session)){
+
+        myusr = ((SRC_TRIG*)my_instance->trgdata)->user;
+        sessusr = session_getUser(my_session->session);
+	myhost = ((SRC_TRIG*)my_instance->trgdata)->host;
+	sesshost = session_get_remote(my_session->session);
+	
+	/**Username was configured*/
+	if(myusr){
+
+	  srcusr = (strcmp(myusr,sessusr) == 0);
+
+	/**No configured username, don't process*/
+	}else{
+	  srcusr = true;
+	}
+	
+	/**Hostname was configured*/
+	if(myhost){
+
+	  srchost = (strcmp(myhost,sesshost) == 0);
+
+	  /**No configured hostname, don't process*/
+	}else{
+	  srchost = true;
+	}
+
+	/**Wrong user or host, don't log*/
+	if(!srcusr ||!srchost){
+	 
 	  goto skip_query;
+ 
 	}
       }
       break;
