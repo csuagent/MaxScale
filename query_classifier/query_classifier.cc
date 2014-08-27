@@ -933,6 +933,69 @@ retblock:
         return querystr;
 }
 
+/**
+ * Reads the parsetree and lists all the affected tables in the query.
+ * In the case of an error, the size of the table is set to zero and no memory is allocated.
+ * The caller must free the allocated memory.
+ *
+ * @param querybuf GWBUF where the table names are extracted from
+ * @param tblsize Pointer where the number of tables is written
+ * @return Array of null-terminated strings with the table names
+ */
+char** skygw_get_table_names(
+			    GWBUF* querybuf,int* tblsize)
+{
+        parsing_info_t* pi;
+        MYSQL*          mysql;
+        THD*            thd;
+        LEX*            lex;
+        TABLE_LIST*     item;
+	int		i = 0;
+        char**          tables;
+        
+        if (!GWBUF_IS_PARSED(querybuf))
+        {
+                tables = NULL;
+                goto retblock;
+        }
+        pi = (parsing_info_t *)gwbuf_get_buffer_object_data(querybuf, 
+                                                            GWBUF_PARSING_INFO);
+
+        if (pi == NULL)
+        {
+                tables = NULL;
+                goto retblock;                
+        }
+        
+        if (pi->pi_query_plain_str == NULL || 
+                (mysql = (MYSQL *)pi->pi_handle) == NULL || 
+                (thd = (THD *)mysql->thd) == NULL ||
+                (lex = thd->lex) == NULL)
+        {
+                ss_dassert(pi->pi_query_plain_str != NULL &&
+                        mysql != NULL && 
+                        thd != NULL && 
+                        lex != NULL);
+                tables = NULL;
+                goto retblock;
+        }
+
+        for (item=lex->select_lex.table_list.first; item != NULL; item=item->next_local) 
+        {
+	  
+	  
+	  tables = (char**)realloc(tables,sizeof(char*)*(i+1));
+	  tables[i++] = strdup(item->alias);
+
+	}
+
+        
+
+retblock:
+	*tblsize = i;
+        return tables;
+}
+
 
 /**
  * Create parsing information; initialize mysql handle, allocate parsing info 

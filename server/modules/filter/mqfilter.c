@@ -68,6 +68,7 @@
 #include <query_classifier.h>
 #include <spinlock.h>
 #include <session.h>
+#include <plugin.h>
 MODULE_INFO 	info = {
   MODULE_API_FILTER,
   MODULE_ALPHA_RELEASE,
@@ -138,6 +139,25 @@ typedef struct source_trigger_t{
   char**	host;
   int		hsize;
 }SRC_TRIG;
+
+/**
+ * Schema logging trigger
+ *
+ * Temporary dummy implementation
+ */
+typedef struct schema_trigger_t{
+  char*	dummy;
+}SHM_TRIG;
+
+/**
+ * Database object logging trigger
+ *
+ * Temporary dummy implementation
+ */
+typedef struct object_trigger_t{
+  char*	dummy;
+}OBJ_TRIG;
+
 
 /**
  * A instance structure, containing the hostname, login credentials,
@@ -412,7 +432,7 @@ static	FILTER	*
 createInstance(char **options, FILTER_PARAMETER **params)
 {
   MQ_INSTANCE	*my_instance;
-  int paramcount = 0, parammax = 64, i = 0;
+  int paramcount = 0, parammax = 64, i = 0, arrsize = 0;
   FILTER_PARAMETER** paramlist;  
   void* trg = NULL;
   
@@ -493,18 +513,39 @@ createInstance(char **options, FILTER_PARAMETER **params)
 	}
 
       }
-      int arrsize = 0;
+
+
+
       switch(my_instance->trgtype){
       case TRG_SOURCE:
+
         trg = (void*)malloc(sizeof(SRC_TRIG));
 	((SRC_TRIG*)trg)->user = NULL;
 	((SRC_TRIG*)trg)->host = NULL;
-	my_instance->trgdata = trg;
+
 	break;
+
+      case TRG_SCHEMA:
+
+        trg = (void*)malloc(sizeof(SHM_TRIG));
+	((SHM_TRIG*)trg)->dummy = NULL;
+
+	break;
+
+      case TRG_OBJECT:
+
+        trg = (void*)malloc(sizeof(OBJ_TRIG));
+	((OBJ_TRIG*)trg)->dummy = NULL;
+
+	break;
+
       default: /**NULL is TRG_ALL*/
 	my_instance->trgdata = NULL;
 	break;
       }
+
+      	my_instance->trgdata = trg;
+
       for(i = 0;i<paramcount;i++){
 	switch(my_instance->trgtype){
 
@@ -523,6 +564,14 @@ createInstance(char **options, FILTER_PARAMETER **params)
 	    arrsize = 0;
 
 	  }
+
+	  break;
+
+	case TRG_SCHEMA:
+
+	  break;
+
+	case TRG_OBJECT:
 
 	  break;
 
@@ -820,7 +869,7 @@ void genkey(char* array, int size)
  * (filter or router) in the filter chain.
  *
  * The function tries to extract a SQL query out of the query buffer,
- * canonize the string, adds a timestamp to it and publishes the resulting string on the exchange.
+ * canonize the query, add a timestamp to it and publish the resulting string on the exchange.
  * The message is tagged with an unique identifier and the clientReply will
  * use the same identifier for the reply from the backend to form a query-reply pair.
  * 
@@ -834,12 +883,26 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
   MQ_SESSION	*my_session = (MQ_SESSION *)session;
   MQ_INSTANCE	*my_instance = (MQ_INSTANCE *)instance;
   char		*ptr, t_buf[128], *combined,*canon_q,*sesshost,*sessusr;
-  bool		success = true, srcusr = false, srchost = false;
+  bool		success = false, srcusr = false, srchost = false;
   int		length, i;
   amqp_basic_properties_t *prop;
-  
+
   if(modutil_is_SQL(queue)){
 
+    /**Parse the query*/
+
+    if (!query_is_parsed(queue)){
+      success = parse_query(queue);
+    }
+
+    if(!success){
+      skygw_log_write(LOGFILE_ERROR,"Error: Parsing query failed.");      
+    }
+    int dbcount = 0;
+    char** sessdb;
+
+    sessdb = skygw_get_table_names(queue,&dbcount);
+    
     switch(my_instance->trgtype){
 
     case TRG_SOURCE:
@@ -894,9 +957,19 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
       }
       break;
 
-    case TRG_ALL:
     case TRG_SCHEMA:
+      
+      /**Schema triggering upimplemented*/
+
+      break;
+
     case TRG_OBJECT:
+
+      /**Object triggering unimplemented*/
+
+      break;
+
+    case TRG_ALL:
     default:
       break;
       
@@ -931,21 +1004,14 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
       prop->message_id = amqp_cstring_bytes("query");
     }
 
-    if (!query_is_parsed(queue)){
-      success = parse_query(queue);
-    }
+   
 
     if(success){
       
       /**Try to convert to a canonical form and use the plain query if unsuccessful*/
       if((canon_q = skygw_get_canonical(queue)) == NULL){
-
-	if((canon_q = malloc(sizeof(char)*length))){
-	  memcpy(canon_q,ptr,length);
-	}else{
-	  skygw_log_write(LOGFILE_ERROR,"Error : Out of memory.");
-	}
-	
+      skygw_log_write_flush(LOGFILE_ERROR,
+			    "Error: Cannot form canonical query.");	
       }
 
     }
@@ -956,7 +1022,7 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
     int qlen = strnlen(canon_q,length) + strnlen(t_buf,128);
     if((combined = malloc((qlen+1)*sizeof(char))) == NULL){
       skygw_log_write_flush(LOGFILE_ERROR,
-			    "Error : Out of memory");
+			    "Error: Out of memory");
     }
     strcpy(combined,t_buf);
     strncat(combined,canon_q,length);
