@@ -155,7 +155,8 @@ typedef struct schema_trigger_t{
  * Temporary dummy implementation
  */
 typedef struct object_trigger_t{
-  char*	dummy;
+  char**	objects;
+  int		size;
 }OBJ_TRIG;
 
 
@@ -535,7 +536,8 @@ createInstance(char **options, FILTER_PARAMETER **params)
       case TRG_OBJECT:
 
         trg = (void*)malloc(sizeof(OBJ_TRIG));
-	((OBJ_TRIG*)trg)->dummy = NULL;
+	((OBJ_TRIG*)trg)->objects = NULL;
+	((OBJ_TRIG*)trg)->size = 0;
 
 	break;
 
@@ -572,7 +574,12 @@ createInstance(char **options, FILTER_PARAMETER **params)
 	  break;
 
 	case TRG_OBJECT:
-
+	  if(!strcmp(paramlist[i]->name,"logging_object_table")){
+	  
+	    ((OBJ_TRIG*)trg)->objects = parse_optstr(paramlist[i]->value,"|",&arrsize);
+	    ((OBJ_TRIG*)trg)->size = arrsize;
+	    arrsize = 0;
+	  }
 	  break;
 
 	default:
@@ -883,8 +890,9 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
   MQ_SESSION	*my_session = (MQ_SESSION *)session;
   MQ_INSTANCE	*my_instance = (MQ_INSTANCE *)instance;
   char		*ptr, t_buf[128], *combined,*canon_q,*sesshost,*sessusr;
-  bool		success = false, srcusr = false, srchost = false;
-  int		length, i;
+  bool		success = false, srcusr = false, srchost = false,match = false;
+  int		length, i, j,dbcount = 0;
+  char**	sessdb;
   amqp_basic_properties_t *prop;
 
   if(modutil_is_SQL(queue)){
@@ -898,11 +906,10 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
     if(!success){
       skygw_log_write(LOGFILE_ERROR,"Error: Parsing query failed.");      
     }
-    int dbcount = 0;
-    char** sessdb;
+
 
     sessdb = skygw_get_table_names(queue,&dbcount);
-    
+
     switch(my_instance->trgtype){
 
     case TRG_SOURCE:
@@ -964,8 +971,27 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
       break;
 
     case TRG_OBJECT:
+      for(j = 0; j<dbcount; j++){      
 
-      /**Object triggering unimplemented*/
+	for(i = 0; i<((OBJ_TRIG*)my_instance->trgdata)->size; i++){
+
+	  if(!strcmp(sessdb[j],((OBJ_TRIG*)my_instance->trgdata)->objects[i])){
+
+	    match = true;
+	    break;
+
+	  }
+
+	}
+
+	if(match){
+	  break;
+	}
+
+      } 
+      if(!match){
+	goto skip_query;
+      }
 
       break;
 
@@ -1033,6 +1059,12 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
   
   /** Pass the query downstream */
  skip_query:
+  if(dbcount > 0){
+    for(i = 0;i<dbcount;i++){
+      free(sessdb[i]);
+    }
+    free(sessdb);
+  }
   return my_session->down.routeQuery(my_session->down.instance,
 				     my_session->down.session, queue);
 }

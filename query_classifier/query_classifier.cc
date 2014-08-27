@@ -949,49 +949,70 @@ char** skygw_get_table_names(
         MYSQL*          mysql;
         THD*            thd;
         LEX*            lex;
-        TABLE_LIST*     item;
-	int		i = 0;
-        char**          tables;
+        TABLE_LIST*     tbl;
+	SELECT_LEX*     slex;
+	int		i = 0, currtblsz = 0;
+        char		**tables;
         
         if (!GWBUF_IS_PARSED(querybuf))
-        {
-                tables = NULL;
-                goto retblock;
-        }
+	  {
+	    tables = NULL;
+	    goto retblock;
+	  }
         pi = (parsing_info_t *)gwbuf_get_buffer_object_data(querybuf, 
                                                             GWBUF_PARSING_INFO);
 
         if (pi == NULL)
-        {
-                tables = NULL;
-                goto retblock;                
-        }
+	  {
+	    tables = NULL;
+	    goto retblock;                
+	  }
         
         if (pi->pi_query_plain_str == NULL || 
-                (mysql = (MYSQL *)pi->pi_handle) == NULL || 
-                (thd = (THD *)mysql->thd) == NULL ||
-                (lex = thd->lex) == NULL)
-        {
-                ss_dassert(pi->pi_query_plain_str != NULL &&
-                        mysql != NULL && 
-                        thd != NULL && 
-                        lex != NULL);
-                tables = NULL;
-                goto retblock;
-        }
+	    (mysql = (MYSQL *)pi->pi_handle) == NULL || 
+	    (thd = (THD *)mysql->thd) == NULL ||
+	    (lex = thd->lex) == NULL ||
+	    (slex = lex->all_selects_list) == NULL)
+	  {
+	    ss_dassert(pi->pi_query_plain_str != NULL &&
+		       mysql != NULL && 
+		       thd != NULL && 
+		       lex != NULL &&
+		       slex != NULL);
+	    tables = NULL;
+	    goto retblock;
+	  }
 
-        for (item=lex->select_lex.table_list.first; item != NULL; item=item->next_local) 
-        {
-	  
-	  
-	  tables = (char**)realloc(tables,sizeof(char*)*(i+1));
-	  tables[i++] = strdup(item->alias);
+	if(slex && slex->table_list.elements > 0){
+	  tables = (char**)malloc(sizeof(char*)*5);
+	  currtblsz = 5;
+	}
+	
+	while(slex){
+
+	  if(slex->table_list.elements > 0){
+	    
+
+
+	    for (tbl=slex->table_list.first; tbl != NULL; tbl=tbl->next_local) 
+	      {
+		if(i >= currtblsz){
+		  currtblsz = currtblsz*2 + 1;
+		  tables = (char**)realloc(tables,sizeof(char*)*(currtblsz));
+		  
+		}
+		tables[i++] = strdup(tbl->alias);
+
+	      }
+
+	  }
+
+	  slex = slex->next_select_in_list();
 
 	}
-
         
 
-retblock:
+ retblock:
 	*tblsize = i;
         return tables;
 }
