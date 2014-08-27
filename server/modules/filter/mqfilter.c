@@ -129,12 +129,14 @@ enum log_trigger_t{
  * Log only those queries that come from a valid pair of username and hostname combinations
  * 
  * Trigger options:
- *	trigger_level_source_user	Username to log
- *	trigger_level_source_host	Hostname to log
+ *	logging_source_user	Username to log
+ *	logging_source_host	Hostname to log
  */
 typedef struct source_trigger_t{
-  char* user;
-  char* host;
+  char**	user;
+  int		usize;
+  char**	host;
+  int		hsize;
 }SRC_TRIG;
 
 /**
@@ -365,6 +367,40 @@ init_conn(MQ_INSTANCE *my_instance)
 }
 
 /**
+ * Parse the provided string into an array of strings.
+ * @param str String to parse
+ * @param tok Token string containing delimiting characters
+ * @param szstore Address where to store the size of the array after parsing
+ * @return The array containing the parsed string
+ */
+char** parse_optstr(char* str, char* tok, int* szstore)
+{
+  char* tk = str;
+  char** arr;
+  int i = 0, size = 1;
+  while((tk = strpbrk(tk + 1,tok))){
+    size++;
+  }
+
+  arr = malloc(sizeof(char*)*size);
+
+  if(arr == NULL){
+      skygw_log_write(LOGFILE_ERROR,
+		      "Error : Cannot allocate enough memory.");
+      *szstore = 0;
+      return NULL;
+  }
+  
+  *szstore = size;
+  tk = strtok(str,tok);
+  while(tk && i < size){
+    arr[i++] = strdup(tk);
+    tk = strtok(NULL,tok);
+  }
+  return arr;
+}
+
+/**
  * Create an instance of the filter for a particular service
  * within MaxScale.
  * 
@@ -376,13 +412,16 @@ static	FILTER	*
 createInstance(char **options, FILTER_PARAMETER **params)
 {
   MQ_INSTANCE	*my_instance;
-  
+  int paramcount = 0, parammax = 64, i = 0;
+  FILTER_PARAMETER** paramlist;  
+  void* trg = NULL;
   
  if ((my_instance = calloc(1, sizeof(MQ_INSTANCE)))&& 
       (my_instance->rconn_lock = malloc(sizeof(SPINLOCK))))
     {
       spinlock_init(my_instance->rconn_lock);
       uid_gen = 0;
+      paramlist = malloc(sizeof(FILTER_PARAMETER*)*64);
 
       if((my_instance->conn = amqp_new_connection()) == NULL){
 
@@ -395,8 +434,7 @@ createInstance(char **options, FILTER_PARAMETER **params)
       my_instance->rconn_intv = 1;
       my_instance->port = 5672;
       
-      int paramcount = 0,parammax = 64,i = 0;
-      FILTER_PARAMETER** paramlist = malloc(sizeof(FILTER_PARAMETER*)*64);
+
 
       for(i = 0;params[i];i++){
 	if(!strcmp(params[i]->name,"hostname")){
@@ -443,7 +481,7 @@ createInstance(char **options, FILTER_PARAMETER **params)
 	    my_instance->trgtype = TRG_ALL;
 	  }
 
-	}else if(strstr(params[i]->name,"logging_trigger_")){
+	}else if(strstr(params[i]->name,"logging_")){
 
 	  if(paramcount < parammax){
 	    paramlist[paramcount] = malloc(sizeof(FILTER_PARAMETER));
@@ -455,10 +493,7 @@ createInstance(char **options, FILTER_PARAMETER **params)
 	}
 
       }
-
-
-      void* trg = NULL;
-
+      int arrsize = 0;
       switch(my_instance->trgtype){
       case TRG_SOURCE:
         trg = (void*)malloc(sizeof(SRC_TRIG));
@@ -475,13 +510,17 @@ createInstance(char **options, FILTER_PARAMETER **params)
 
 	case TRG_SOURCE:
 
-	  if(!strcmp(paramlist[i]->name,"logging_trigger_source_user")){
+	  if(!strcmp(paramlist[i]->name,"logging_source_user")){
 	    
-	    ((SRC_TRIG*)my_instance->trgdata)->user = strdup(paramlist[i]->value);
+	    ((SRC_TRIG*)my_instance->trgdata)->user = parse_optstr(paramlist[i]->value,"|",&arrsize);
+	    ((SRC_TRIG*)my_instance->trgdata)->usize = arrsize;
+	    arrsize = 0;
 
-	  }else if(!strcmp(paramlist[i]->name,"logging_trigger_source_host")){
+	  }else if(!strcmp(paramlist[i]->name,"logging_source_host")){
 	    
-	    ((SRC_TRIG*)my_instance->trgdata)->host = strdup(paramlist[i]->value);
+	    ((SRC_TRIG*)my_instance->trgdata)->host = parse_optstr(paramlist[i]->value,"|",&arrsize);
+	    ((SRC_TRIG*)my_instance->trgdata)->hsize = arrsize;
+	    arrsize = 0;
 
 	  }
 
@@ -781,9 +820,9 @@ void genkey(char* array, int size)
  * (filter or router) in the filter chain.
  *
  * The function tries to extract a SQL query out of the query buffer,
- * adds a timestamp to it and publishes the resulting string on the exchange.
+ * canonize the string, adds a timestamp to it and publishes the resulting string on the exchange.
  * The message is tagged with an unique identifier and the clientReply will
- * use the same identifier for the reply from the backend.
+ * use the same identifier for the reply from the backend to form a query-reply pair.
  * 
  * @param instance	The filter instance data
  * @param session	The filter session
@@ -794,9 +833,9 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
 {
   MQ_SESSION	*my_session = (MQ_SESSION *)session;
   MQ_INSTANCE	*my_instance = (MQ_INSTANCE *)instance;
-  char		*ptr, t_buf[128], *combined,*canon_q,*myusr,*myhost,*sesshost,*sessusr;
+  char		*ptr, t_buf[128], *combined,*canon_q,*sesshost,*sessusr;
   bool		success = true, srcusr = false, srchost = false;
-  int		length;
+  int		length, i;
   amqp_basic_properties_t *prop;
   
   if(modutil_is_SQL(queue)){
@@ -806,26 +845,40 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
     case TRG_SOURCE:
       
       if(session_isvalid(my_session->session)){
-
-        myusr = ((SRC_TRIG*)my_instance->trgdata)->user;
+	
         sessusr = session_getUser(my_session->session);
-	myhost = ((SRC_TRIG*)my_instance->trgdata)->host;
 	sesshost = session_get_remote(my_session->session);
 	
 	/**Username was configured*/
-	if(myusr){
+	if(((SRC_TRIG*)my_instance->trgdata)->usize > 0){
+	  for(i = 0;i<((SRC_TRIG*)my_instance->trgdata)->usize;i++){
 
-	  srcusr = (strcmp(myusr,sessusr) == 0);
+	    if((srcusr = (strcmp(((SRC_TRIG*)my_instance->trgdata)->user[i],
+				 sessusr) == 0)))
+	      {
+		break;
+	      }
+	    
+	  }
 
-	/**No configured username, don't process*/
+	  /**No configured username, don't process*/
 	}else{
 	  srcusr = true;
 	}
 	
 	/**Hostname was configured*/
-	if(myhost){
+	if(((SRC_TRIG*)my_instance->trgdata)->hsize > 0){
 
-	  srchost = (strcmp(myhost,sesshost) == 0);
+	  for(i = 0;i<((SRC_TRIG*)my_instance->trgdata)->hsize;i++){
+	    
+	    if((srchost = (strcmp(((SRC_TRIG*)my_instance->trgdata)->host[i],
+				 sesshost) == 0)))
+	      {
+		break;
+	      }
+	  
+	  }
+
 
 	  /**No configured hostname, don't process*/
 	}else{
@@ -886,8 +939,13 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
       
       /**Try to convert to a canonical form and use the plain query if unsuccessful*/
       if((canon_q = skygw_get_canonical(queue)) == NULL){
-	parsing_info_t* pinfo = (parsing_info_t*)queue->gwbuf_parsing_info;
-	canon_q = strdup(pinfo->pi_query_plain_str);
+
+	if((canon_q = malloc(sizeof(char)*length))){
+	  memcpy(canon_q,ptr,length);
+	}else{
+	  skygw_log_write(LOGFILE_ERROR,"Error : Out of memory.");
+	}
+	
       }
 
     }
