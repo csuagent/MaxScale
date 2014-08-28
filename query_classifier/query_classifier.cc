@@ -952,7 +952,7 @@ char** skygw_get_table_names(
         TABLE_LIST*     tbl;
 	SELECT_LEX*     slex;
 	int		i = 0, currtblsz = 0;
-        char		**tables;
+        char		**tables,**tmp;
         
         if (!GWBUF_IS_PARSED(querybuf))
 	  {
@@ -982,11 +982,6 @@ char** skygw_get_table_names(
 	    tables = NULL;
 	    goto retblock;
 	  }
-
-	if(slex && slex->table_list.elements > 0){
-	  tables = (char**)malloc(sizeof(char*)*5);
-	  currtblsz = 5;
-	}
 	
 	while(slex){
 
@@ -997,8 +992,15 @@ char** skygw_get_table_names(
 	    for (tbl=slex->table_list.first; tbl != NULL; tbl=tbl->next_local) 
 	      {
 		if(i >= currtblsz){
-		  currtblsz = currtblsz*2 + 1;
-		  tables = (char**)realloc(tables,sizeof(char*)*(currtblsz));
+		  
+		  tmp = (char**)malloc(sizeof(char*)*(currtblsz*2+1));
+		  if(tmp){
+		    memcpy(tmp,tables,sizeof(char*)*currtblsz);
+		    free(tables);
+		    tables = tmp;
+		    currtblsz = currtblsz*2 + 1;
+		  }
+		  
 		  
 		}
 		tables[i++] = strdup(tbl->alias);
