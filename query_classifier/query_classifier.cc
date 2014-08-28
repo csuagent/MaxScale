@@ -934,11 +934,11 @@ retblock:
 }
 
 /**
- * Reads the parsetree and lists all the affected tables in the query.
+ * Reads the parsetree and lists all the affected tables and views in the query.
  * In the case of an error, the size of the table is set to zero and no memory is allocated.
  * The caller must free the allocated memory.
  *
- * @param querybuf GWBUF where the table names are extracted from
+ * @param querybuf GWBUF where the table and view names are extracted from
  * @param tblsize Pointer where the number of tables is written
  * @return Array of null-terminated strings with the table names
  */
@@ -1010,7 +1010,9 @@ char** skygw_get_table_names(
 	  slex = slex->next_select_in_list();
 
 	}
-        
+        	
+
+	
 
  retblock:
 	*tblsize = i;
