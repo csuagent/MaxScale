@@ -8,7 +8,7 @@
 #include <amqp.h>
 #include <amqp_framing.h>
 #include <mysql.h>
-
+#include <signal.h>
 
 #ifdef CONFIG_IN_ETC
 #define CONFIG 1
@@ -34,12 +34,21 @@ typedef struct consumer_t
   int port,dbport;
 }CONSUMER;
 
+static int all_ok;
 static CONSUMER* c_inst;
 static char* DB_DATABASE = "CREATE DATABASE IF NOT EXISTS %s;";
 static char* DB_TABLE = "CREATE TABLE IF NOT EXISTS pairs (tag VARCHAR(64) PRIMARY KEY NOT NULL, query VARCHAR(2048), reply VARCHAR(2048), date_in DATETIME NOT NULL, date_out DATETIME DEFAULT NULL, counter INT DEFAULT 1)";
 static char* DB_INSERT = "INSERT INTO pairs(tag, query, date_in) VALUES ('%s','%s',FROM_UNIXTIME(%s))";
 static char* DB_UPDATE = "UPDATE pairs SET reply='%s', date_out=FROM_UNIXTIME(%s) WHERE tag='%s'";
 static char* DB_INCREMENT = "UPDATE pairs SET counter = counter+1, date_out=FROM_UNIXTIME(%s) WHERE query='%s'";
+
+void sighndl(int signum)
+{
+  if(signum == SIGINT){
+    all_ok = 0;
+    alarm(1);
+  }
+}
 
 int handler(void* user, const char* section, const char* name,
 	    const char* value)
@@ -322,7 +331,7 @@ int sendToServer(MYSQL* server, amqp_message_t* a, amqp_message_t* b){
 }
 int main(int argc, char** argv)
 {
-  int channel = 1, all_ok = 1, status = AMQP_STATUS_OK, cnfnlen;
+  int channel = 1, status = AMQP_STATUS_OK, cnfnlen;
   amqp_socket_t *socket = NULL;
   amqp_connection_state_t conn;
   amqp_rpc_reply_t ret;
@@ -333,6 +342,10 @@ int main(int argc, char** argv)
   char ch, *cnfname = NULL, *cnfpath = NULL;
   static const char* fname = "consumer.cnf";
   static const char* fprefix = CONSUMER_CONFIG_PREFIX;
+
+  if(signal(SIGINT,sighndl) == SIG_IGN){
+    signal(SIGINT,SIG_IGN);
+  }
 
   while((ch = getopt(argc,argv,"c:"))!= -1){
     switch(ch){
@@ -371,6 +384,7 @@ int main(int argc, char** argv)
 
   timeout.tv_sec = 2;
   timeout.tv_usec = 0;
+  all_ok = 1;
 
   if((c_inst = calloc(1,sizeof(CONSUMER))) == NULL){
     printf( "Fatal Error: Cannot allocate enough memory.\n");
@@ -476,7 +490,7 @@ int main(int argc, char** argv)
 
   }
 
-
+  printf("Shutting down...\n");
  error:
 
   mysql_close(&db_inst);
@@ -499,6 +513,9 @@ int main(int argc, char** argv)
   if(c_inst){
 
     free(c_inst->hostname);
+    free(c_inst->vhost);
+    free(c_inst->user);
+    free(c_inst->passwd);
     free(c_inst->queue);
     free(c_inst->dbserver);
     free(c_inst->dbname);
