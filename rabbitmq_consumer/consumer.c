@@ -330,7 +330,7 @@ int main(int argc, char** argv)
   amqp_frame_t frame;
   struct timeval timeout;
   MYSQL db_inst;
-  char ch, *cnfname, *cnfpath = NULL;
+  char ch, *cnfname = NULL, *cnfpath = NULL;
   static const char* fname = "consumer.cnf";
   static const char* fprefix = CONSUMER_CONFIG_PREFIX;
 
