@@ -555,7 +555,7 @@ createInstance(char **options, FILTER_PARAMETER **params)
 
       }
 
-      if(my_instance->trgtype & TRG_SOURCE){
+      if(my_instance->trgtype & TRG_SCHEMA){
 
         trg = (void*)malloc(sizeof(SHM_TRIG));
 	((SHM_TRIG*)trg)->objects = NULL;
@@ -1001,11 +1001,11 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
 
     if(my_instance->trgtype & TRG_SCHEMA && my_instance->shm_trg){
 
-      if(strnlen(my_session->db,10)>0){
+      if(my_session->db && *(my_session->db) != '\0'){
 
 	for(i = 0; i<my_instance->shm_trg->size; i++){
 
-	  if(strncmp(my_session->db,my_instance->shm_trg->objects[i],strlen(my_session->db)) == 0){
+	  if(strncmp(my_session->db,my_instance->shm_trg->objects[i],strlen(my_instance->shm_trg->objects[i])) == 0){
 	    schema_ok = true;
 	    break;
 	  }
