@@ -382,7 +382,7 @@ int main(int argc, char** argv)
   
   strcat(cnfname,fname);
 
-  timeout.tv_sec = 2;
+  timeout.tv_sec = 1;
   timeout.tv_usec = 0;
   all_ok = 1;
 
@@ -444,6 +444,7 @@ int main(int argc, char** argv)
     goto error;
   }
   amqp_basic_consume(conn,channel,amqp_cstring_bytes(c_inst->queue),amqp_empty_bytes,0,0,0,amqp_empty_table);
+  int timed_out = 0;
 
   while(all_ok){
      
@@ -451,16 +452,15 @@ int main(int argc, char** argv)
 
     /**No frames to read from server, possibly out of messages*/
     if(status == AMQP_STATUS_TIMEOUT){ 
-      printf("Frame wait timed out, trying again in %d seconds.\n",((int)timeout.tv_sec)*2);	
+      timed_out = 1;
       sleep(timeout.tv_sec);
-      if(timeout.tv_sec < 128){
-	timeout.tv_sec *= 2;
-      }
-      
+      write(1,".",1);
       continue;
-      
     }else{
-      timeout.tv_sec = 2;
+      if(timed_out){
+	timed_out = 0;
+	write(1,"\n",1);
+      }
     }
 
     if(frame.payload.method.id == AMQP_BASIC_DELIVER_METHOD){

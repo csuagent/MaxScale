@@ -120,9 +120,9 @@ typedef struct mqmessage_t {
  */
 enum log_trigger_t{
   TRG_ALL = 0x00,
-  TRG_SOURCE = 0x02,
-  TRG_SCHEMA = 0x04,
-  TRG_OBJECT = 0x08
+  TRG_SOURCE = 0x01,
+  TRG_SCHEMA = 0x02,
+  TRG_OBJECT = 0x04
 };
 
 /**
@@ -546,30 +546,27 @@ createInstance(char **options, FILTER_PARAMETER **params)
 
       if(my_instance->trgtype & TRG_SOURCE){
 
-        trg = (void*)malloc(sizeof(SRC_TRIG));
-	((SRC_TRIG*)trg)->user = NULL;
-	((SRC_TRIG*)trg)->host = NULL;
-	((SRC_TRIG*)trg)->usize = 0;
-	((SRC_TRIG*)trg)->hsize = 0;
-	my_instance->src_trg = trg;
+        my_instance->src_trg = (SRC_TRIG*)malloc(sizeof(SRC_TRIG));
+        my_instance->src_trg->user = NULL;
+        my_instance->src_trg->host = NULL;
+        my_instance->src_trg->usize = 0;
+	my_instance->src_trg->hsize = 0;	
 
       }
 
       if(my_instance->trgtype & TRG_SCHEMA){
 
-        trg = (void*)malloc(sizeof(SHM_TRIG));
-	((SHM_TRIG*)trg)->objects = NULL;
-	((SHM_TRIG*)trg)->size = 0;
-	my_instance->shm_trg = trg;
+        my_instance->shm_trg = (SHM_TRIG*)malloc(sizeof(SHM_TRIG));
+        my_instance->shm_trg->objects = NULL;
+        my_instance->shm_trg->size = 0;
 
       }
 
       if(my_instance->trgtype & TRG_OBJECT){
 
-        trg = (void*)malloc(sizeof(OBJ_TRIG));
-	((OBJ_TRIG*)trg)->objects = NULL;
-	((OBJ_TRIG*)trg)->size = 0;
-	my_instance->obj_trg = trg;
+        my_instance->obj_trg = (OBJ_TRIG*)malloc(sizeof(OBJ_TRIG));
+        my_instance->obj_trg->objects = NULL;
+        my_instance->obj_trg->size = 0;
 
       }
 
@@ -1001,11 +998,11 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
 
     if(my_instance->trgtype & TRG_SCHEMA && my_instance->shm_trg){
 
-      if(my_session->db && *(my_session->db) != '\0'){
+      if(my_session->db && strlen(my_session->db)>0){
 
 	for(i = 0; i<my_instance->shm_trg->size; i++){
 
-	  if(strncmp(my_session->db,my_instance->shm_trg->objects[i],strlen(my_instance->shm_trg->objects[i])) == 0){
+	  if(strcmp(my_session->db,my_instance->shm_trg->objects[i]) == 0){
 	    schema_ok = true;
 	    break;
 	  }
