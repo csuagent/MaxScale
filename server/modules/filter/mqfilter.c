@@ -218,6 +218,7 @@ typedef struct {
  */
 typedef struct {
   char*		uid; /**Unique identifier used to tag messages*/
+  char*		db; /**The currently active database*/
   DOWNSTREAM	down;
   UPSTREAM	up;
   SESSION*	session;
@@ -807,13 +808,20 @@ static	void	*
 newSession(FILTER *instance, SESSION *session)
 {
   MQ_SESSION	*my_session;
-  
-  if ((my_session = calloc(1, sizeof(MQ_SESSION))) != NULL){
+  MYSQL_session* sessauth;
 
+  if ((my_session = calloc(1, sizeof(MQ_SESSION))) != NULL){
+    
     my_session->was_query = false;
     my_session->uid = NULL;
     my_session->session = session;
-
+    sessauth = my_session->session->data;
+    if(sessauth->db && strnlen(sessauth->db,128)>0){
+      my_session->db = strdup(sessauth->db);
+    }else{
+      my_session->db = NULL;
+    }
+    
   }
 
   return my_session;
@@ -845,6 +853,7 @@ freeSession(FILTER *instance, void *session)
 {
   MQ_SESSION	*my_session = (MQ_SESSION *)session;
   free(my_session->uid);
+  free(my_session->db);
   free(my_session);
   return;
 }
@@ -885,7 +894,19 @@ void genkey(char* array, int size)
   sprintf(array+i,"%0*x",size - i,atomic_add(&uid_gen,1));
 }
 
-
+/**
+ * Calculated the length of the SQL packet.
+ * @param c Pointer to the first byte of a packet
+ * @return The length of the packet
+ */
+unsigned int pktlen(void* c)
+{
+  unsigned char* ptr = (unsigned char*)c;
+  unsigned int plen = *ptr;
+  plen += (*++ptr << 8);
+  plen += (*++ptr << 8);
+  return plen;
+}
 
 /**
  * The routeQuery entry point. This is passed the query buffer
@@ -911,13 +932,23 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
   bool		success = false, srcusr = false, srchost = false,match = false;
   int		length, i, j,dbcount = 0;
   char**	sesstbls;
-  MYSQL_session* sessauth;
-  amqp_basic_properties_t *prop;
+  unsigned int	plen = 0;
+  amqp_basic_properties_t *prop;  
+
+  /**The user is changing databases*/
+  if(*((char*)(queue->start + 4)) == 0x02){
+    if(my_session->db){
+      free(my_session->db);
+    }
+    plen = pktlen(queue->start)+1;
+    my_session->db = calloc(plen,sizeof(char));
+    memcpy(my_session->db,queue->start + 5,plen - 1);
+  }
 
   if(modutil_is_SQL(queue)){
 
-    /**Parse the query*/
-
+  /**Parse the query*/
+   
     if (!query_is_parsed(queue)){
       success = parse_query(queue);
     }
@@ -981,14 +1012,12 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
       break;
 
     case TRG_SCHEMA:
-      
-      sessauth = my_session->session->data;
 
-      if(strnlen(sessauth->db,10) > 0){
+      if(my_session->db){
 
 	for(i = 0; i<((SHM_TRIG*)my_instance->trgdata)->size; i++){
 
-	  if((match = (strncmp(sessauth->db,((SHM_TRIG*)my_instance->trgdata)->objects[i],strlen(sessauth->db)) == 0))){
+	  if((match = (strncmp(my_session->db,((SHM_TRIG*)my_instance->trgdata)->objects[i],strlen(my_session->db)) == 0))){
 	    break;
 	  }
 	}
@@ -1098,20 +1127,6 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
   }
   return my_session->down.routeQuery(my_session->down.instance,
 				     my_session->down.session, queue);
-}
-
-/**
- * Calculated the length of the SQL packet.
- * @param c Pointer to the first byte of a packet
- * @return The length of the packet
- */
-unsigned int pktlen(void* c)
-{
-  unsigned char* ptr = (unsigned char*)c;
-  unsigned int plen = *ptr;
-  plen += (*++ptr << 8);
-  plen += (*++ptr << 8);
-  return plen;
 }
 
 /**
