@@ -119,10 +119,10 @@ typedef struct mqmessage_t {
  *Logging trigger levels
  */
 enum log_trigger_t{
-  TRG_ALL,
-  TRG_SOURCE,
-  TRG_SCHEMA,
-  TRG_OBJECT
+  TRG_ALL = 0x00,
+  TRG_SOURCE = 0x02,
+  TRG_SCHEMA = 0x04,
+  TRG_OBJECT = 0x08
 };
 
 /**
@@ -204,7 +204,9 @@ typedef struct {
   SPINLOCK* rconn_lock;
   mqmessage* messages;
   enum log_trigger_t trgtype;
-  void* trgdata;
+  SRC_TRIG* src_trg;
+  SHM_TRIG* shm_trg;
+  OBJ_TRIG* obj_trg;
 } MQ_INSTANCE;
 
 /**
@@ -446,9 +448,10 @@ static	FILTER	*
 createInstance(char **options, FILTER_PARAMETER **params)
 {
   MQ_INSTANCE	*my_instance;
-  int paramcount = 0, parammax = 64, i = 0, arrsize = 0;
+  int paramcount = 0, parammax = 64, i = 0, x = 0, arrsize = 0;
   FILTER_PARAMETER** paramlist;  
   void* trg = NULL;
+  char** arr;
   
   if ((my_instance = calloc(1, sizeof(MQ_INSTANCE)))&& 
       (my_instance->rconn_lock = malloc(sizeof(SPINLOCK))))
@@ -467,7 +470,7 @@ createInstance(char **options, FILTER_PARAMETER **params)
       my_instance->conn_stat = AMQP_STATUS_OK;
       my_instance->rconn_intv = 1;
       my_instance->port = 5672;
-      
+      my_instance->trgtype = TRG_ALL;      
 
 
       for(i = 0;params[i];i++){
@@ -505,15 +508,28 @@ createInstance(char **options, FILTER_PARAMETER **params)
 
 	}else if(!strcmp(params[i]->name,"logging_trigger")){
 	  
-	  if(!strcmp(params[i]->value,"source")){
-	    my_instance->trgtype = TRG_SOURCE;
-	  }else if(!strcmp(params[i]->value,"schema")){
-	    my_instance->trgtype = TRG_SCHEMA;
-	  }else if(!strcmp(params[i]->value,"object")){
-	    my_instance->trgtype = TRG_OBJECT;
-	  }else{
-	    my_instance->trgtype = TRG_ALL;
+	  arr = parse_optstr(params[i]->value,"|",&arrsize);
+
+	  for(x = 0;x<arrsize;x++){
+	    if(!strcmp(arr[x],"source")){
+	      my_instance->trgtype |= TRG_SOURCE;
+	    }else if(!strcmp(arr[x],"schema")){
+	      my_instance->trgtype |= TRG_SCHEMA;
+	    }else if(!strcmp(arr[x],"object")){
+	      my_instance->trgtype |= TRG_OBJECT;
+	    }else if(!strcmp(arr[x],"all")){
+	      my_instance->trgtype = TRG_ALL;
+	    }else{
+	      skygw_log_write(LOGFILE_ERROR,"Error: Unknown option for 'logging_trigger':%s.",arr[x]);
+	    }
 	  }
+
+	  if(arrsize > 0){
+	    free(arr);
+	  }
+	  arrsize = 0;
+	  
+
 
 	}else if(strstr(params[i]->name,"logging_")){
 
@@ -528,89 +544,73 @@ createInstance(char **options, FILTER_PARAMETER **params)
 
       }
 
-
-
-      switch(my_instance->trgtype){
-      case TRG_SOURCE:
+      if(my_instance->trgtype & TRG_SOURCE){
 
         trg = (void*)malloc(sizeof(SRC_TRIG));
 	((SRC_TRIG*)trg)->user = NULL;
 	((SRC_TRIG*)trg)->host = NULL;
+	((SRC_TRIG*)trg)->usize = 0;
+	((SRC_TRIG*)trg)->hsize = 0;
+	my_instance->src_trg = trg;
 
-	break;
+      }
 
-      case TRG_SCHEMA:
+      if(my_instance->trgtype & TRG_SOURCE){
 
         trg = (void*)malloc(sizeof(SHM_TRIG));
 	((SHM_TRIG*)trg)->objects = NULL;
 	((SHM_TRIG*)trg)->size = 0;
+	my_instance->shm_trg = trg;
 
-	break;
+      }
 
-      case TRG_OBJECT:
+      if(my_instance->trgtype & TRG_OBJECT){
 
         trg = (void*)malloc(sizeof(OBJ_TRIG));
 	((OBJ_TRIG*)trg)->objects = NULL;
 	((OBJ_TRIG*)trg)->size = 0;
+	my_instance->obj_trg = trg;
 
-	break;
-
-      default: /**NULL is TRG_ALL*/
-	my_instance->trgdata = NULL;
-	break;
       }
 
-      my_instance->trgdata = trg;
-
       for(i = 0;i<paramcount;i++){
-	switch(my_instance->trgtype){
 
-	case TRG_SOURCE:
-
-	  if(!strcmp(paramlist[i]->name,"logging_source_user")){
+	if(!strcmp(paramlist[i]->name,"logging_source_user")){
 	    
-	    ((SRC_TRIG*)my_instance->trgdata)->user = parse_optstr(paramlist[i]->value,"|",&arrsize);
-	    ((SRC_TRIG*)my_instance->trgdata)->usize = arrsize;
+	  if(my_instance->src_trg){
+	    my_instance->src_trg->user = parse_optstr(paramlist[i]->value,"|",&arrsize);
+	    my_instance->src_trg->usize = arrsize;
 	    arrsize = 0;
+	  }
 
-	  }else if(!strcmp(paramlist[i]->name,"logging_source_host")){
+	}else if(!strcmp(paramlist[i]->name,"logging_source_host")){
 	    
-	    ((SRC_TRIG*)my_instance->trgdata)->host = parse_optstr(paramlist[i]->value,"|",&arrsize);
-	    ((SRC_TRIG*)my_instance->trgdata)->hsize = arrsize;
-	    arrsize = 0;
-
-	  }
-
-	  break;
-
-	case TRG_SCHEMA:
-	  if(!strcmp(paramlist[i]->name,"logging_schema")){
-	  
-	    ((SHM_TRIG*)trg)->objects = parse_optstr(paramlist[i]->value,"|",&arrsize);
-	    ((SHM_TRIG*)trg)->size = arrsize;
+	  if(my_instance->src_trg){
+	    my_instance->src_trg->host = parse_optstr(paramlist[i]->value,"|",&arrsize);
+	    my_instance->src_trg->hsize = arrsize;
 	    arrsize = 0;
 	  }
-	  break;
 
-	case TRG_OBJECT:
-	  if(!strcmp(paramlist[i]->name,"logging_object")){
-	  
-	    ((OBJ_TRIG*)trg)->objects = parse_optstr(paramlist[i]->value,"|",&arrsize);
-	    ((OBJ_TRIG*)trg)->size = arrsize;
+	}else if(!strcmp(paramlist[i]->name,"logging_schema")){
+	    
+	  if(my_instance->shm_trg){
+	    my_instance->shm_trg->objects = parse_optstr(paramlist[i]->value,"|",&arrsize);
+	    my_instance->shm_trg->size = arrsize;
 	    arrsize = 0;
 	  }
-	  break;
 
-	default:
-
-	  break;
+	}else if(!strcmp(paramlist[i]->name,"logging_object")){
+	    
+	  if(my_instance->obj_trg){
+	    my_instance->obj_trg->objects = parse_optstr(paramlist[i]->value,"|",&arrsize);
+	    my_instance->obj_trg->size = arrsize;
+	    arrsize = 0;
+	  }
 
 	}
-	
 	free(paramlist[i]->name);
 	free(paramlist[i]->value);
 	free(paramlist[i]);
-	
       }
 
       free(paramlist);
@@ -929,7 +929,7 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
   MQ_SESSION	*my_session = (MQ_SESSION *)session;
   MQ_INSTANCE	*my_instance = (MQ_INSTANCE *)instance;
   char		*ptr, t_buf[128], *combined,*canon_q,*sesshost,*sessusr;
-  bool		success = false, srcusr = false, srchost = false,match = false;
+  bool		success = false, src_ok = false,schema_ok = false,obj_ok = false;
   int		length, i, j,dbcount = 0;
   char**	sesstbls;
   unsigned int	plen = 0;
@@ -940,14 +940,14 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
     if(my_session->db){
       free(my_session->db);
     }
-    plen = pktlen(queue->start)+1;
+    plen = pktlen(queue->start);
     my_session->db = calloc(plen,sizeof(char));
     memcpy(my_session->db,queue->start + 5,plen - 1);
   }
 
   if(modutil_is_SQL(queue)){
 
-  /**Parse the query*/
+    /**Parse the query*/
    
     if (!query_is_parsed(queue)){
       success = parse_query(queue);
@@ -957,9 +957,7 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
       skygw_log_write(LOGFILE_ERROR,"Error: Parsing query failed.");      
     }
 
-    switch(my_instance->trgtype){
-
-    case TRG_SOURCE:
+    if(my_instance->trgtype & TRG_SOURCE && my_instance->src_trg){
       
       if(session_isvalid(my_session->session)){
 	
@@ -967,164 +965,147 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
 	sesshost = session_get_remote(my_session->session);
 	
 	/**Username was configured*/
-	if(((SRC_TRIG*)my_instance->trgdata)->usize > 0){
-	  for(i = 0;i<((SRC_TRIG*)my_instance->trgdata)->usize;i++){
+	if(my_instance->src_trg->usize > 0){
+	  for(i = 0;i<my_instance->src_trg->usize;i++){
 
-	    if((srcusr = (strcmp(((SRC_TRIG*)my_instance->trgdata)->user[i],
-				 sessusr) == 0)))
+	    if(strcmp(my_instance->src_trg->user[i],sessusr) == 0)
 	      {
+		src_ok = true;
 		break;
 	      }
 	    
 	  }
 
-	  /**No configured username, don't process*/
-	}else{
-	  srcusr = true;
+	  
 	}
-	
-	/**Hostname was configured*/
-	if(((SRC_TRIG*)my_instance->trgdata)->hsize > 0){
 
-	  for(i = 0;i<((SRC_TRIG*)my_instance->trgdata)->hsize;i++){
+	/**If username was not matched, try to match hostname*/
+
+	if(!src_ok && my_instance->src_trg->hsize > 0){
+
+	  for(i = 0;i<my_instance->src_trg->hsize;i++){
 	    
-	    if((srchost = (strcmp(((SRC_TRIG*)my_instance->trgdata)->host[i],
-				  sesshost) == 0)))
+	    if(strcmp(my_instance->src_trg->host[i],sesshost) == 0)
 	      {
+		src_ok = true;
 		break;
 	      }
 	  
 	  }
 
-
-	  /**No configured hostname, don't process*/
-	}else{
-	  srchost = true;
 	}
 
-	/**Wrong user or host, don't log*/
-	if(!srcusr ||!srchost){
-	 
-	  goto skip_query;
- 
-	}
       }
-      break;
 
-    case TRG_SCHEMA:
+    }
 
-      if(my_session->db){
+    if(my_instance->trgtype & TRG_SCHEMA && my_instance->shm_trg){
 
-	for(i = 0; i<((SHM_TRIG*)my_instance->trgdata)->size; i++){
+      if(strnlen(my_session->db,10)>0){
 
-	  if((match = (strncmp(my_session->db,((SHM_TRIG*)my_instance->trgdata)->objects[i],strlen(my_session->db)) == 0))){
+	for(i = 0; i<my_instance->shm_trg->size; i++){
+
+	  if(strncmp(my_session->db,my_instance->shm_trg->objects[i],strlen(my_session->db)) == 0){
+	    schema_ok = true;
 	    break;
 	  }
 	}
       }
 
-      if(!match){
-	goto skip_query;
-      }       
+    }
 
-      break;
-
-    case TRG_OBJECT:
+    if(my_instance->trgtype & TRG_OBJECT && my_instance->obj_trg){
 
       sesstbls = skygw_get_table_names(queue,&dbcount);
 
       for(j = 0; j<dbcount; j++){      
 
-	for(i = 0; i<((OBJ_TRIG*)my_instance->trgdata)->size; i++){
+	for(i = 0; i<my_instance->obj_trg->size; i++){
 
-	  if(!strcmp(sesstbls[j],((OBJ_TRIG*)my_instance->trgdata)->objects[i])){
-
-	    match = true;
+	  if(!strcmp(sesstbls[j],my_instance->obj_trg->objects[i])){
+	    obj_ok = true;
 	    break;
 	  }
-	}
 
-	if(match){
-	  break;
 	}
-
-      } 
-      if(!match){
-	goto skip_query;
       }
-
-      break;
-
-    case TRG_ALL:
-    default:
-      break;
-      
     }
 
-    if(my_session->uid == NULL){
-
-      my_session->uid = calloc(33,sizeof(char));
-
-      if(!my_session->uid){
-	skygw_log_write(LOGFILE_ERROR,"Error : Out of memory.");
-      }else{
-	genkey(my_session->uid,32);
-      }
-
-    }
     
-  }
 
-  if(modutil_extract_SQL(queue, &ptr, &length)){
+    if(src_ok||schema_ok||obj_ok){
 
-    my_session->was_query = true;
+      /**
+       * Something matched the trigger, log the query
+       */
+
+      if(my_session->uid == NULL){
+
+	my_session->uid = calloc(33,sizeof(char));
+
+	if(!my_session->uid){
+	  skygw_log_write(LOGFILE_ERROR,"Error : Out of memory.");
+	}else{
+	  genkey(my_session->uid,32);
+	}
+
+      }
+    
+
+      if(modutil_extract_SQL(queue, &ptr, &length)){
+
+	my_session->was_query = true;
       
-    if((prop = malloc(sizeof(amqp_basic_properties_t)))){
-      prop->_flags = AMQP_BASIC_CONTENT_TYPE_FLAG |
-	AMQP_BASIC_DELIVERY_MODE_FLAG |
-	AMQP_BASIC_MESSAGE_ID_FLAG | 
-	AMQP_BASIC_CORRELATION_ID_FLAG;
-      prop->content_type = amqp_cstring_bytes("text/plain");
-      prop->delivery_mode = AMQP_DELIVERY_PERSISTENT;
-      prop->correlation_id = amqp_cstring_bytes(my_session->uid);
-      prop->message_id = amqp_cstring_bytes("query");
-    }
+	if((prop = malloc(sizeof(amqp_basic_properties_t)))){
+	  prop->_flags = AMQP_BASIC_CONTENT_TYPE_FLAG |
+	    AMQP_BASIC_DELIVERY_MODE_FLAG |
+	    AMQP_BASIC_MESSAGE_ID_FLAG | 
+	    AMQP_BASIC_CORRELATION_ID_FLAG;
+	  prop->content_type = amqp_cstring_bytes("text/plain");
+	  prop->delivery_mode = AMQP_DELIVERY_PERSISTENT;
+	  prop->correlation_id = amqp_cstring_bytes(my_session->uid);
+	  prop->message_id = amqp_cstring_bytes("query");
+	}
 
    
 
-    if(success){
+	if(success){
       
-      /**Try to convert to a canonical form and use the plain query if unsuccessful*/
-      if((canon_q = skygw_get_canonical(queue)) == NULL){
-	skygw_log_write_flush(LOGFILE_ERROR,
-			      "Error: Cannot form canonical query.");	
+	  /**Try to convert to a canonical form and use the plain query if unsuccessful*/
+	  if((canon_q = skygw_get_canonical(queue)) == NULL){
+	    skygw_log_write_flush(LOGFILE_ERROR,
+				  "Error: Cannot form canonical query.");	
+	  }
+
+	}
+ 
+	memset(t_buf,0,128);      
+	sprintf(t_buf, "%lu|",(unsigned long)time(NULL));
+
+	int qlen = strnlen(canon_q,length) + strnlen(t_buf,128);
+	if((combined = malloc((qlen+1)*sizeof(char))) == NULL){
+	  skygw_log_write_flush(LOGFILE_ERROR,
+				"Error: Out of memory");
+	}
+	strcpy(combined,t_buf);
+	strncat(combined,canon_q,length);
+      
+	pushMessage(my_instance,prop,combined);
+	free(canon_q);
       }
 
-    }
- 
-    memset(t_buf,0,128);      
-    sprintf(t_buf, "%lu|",(unsigned long)time(NULL));
+    } 
 
-    int qlen = strnlen(canon_q,length) + strnlen(t_buf,128);
-    if((combined = malloc((qlen+1)*sizeof(char))) == NULL){
-      skygw_log_write_flush(LOGFILE_ERROR,
-			    "Error: Out of memory");
+    if(dbcount > 0){
+      for(i = 0;i<dbcount;i++){
+	free(sesstbls[i]);
+      }
+      free(sesstbls);
     }
-    strcpy(combined,t_buf);
-    strncat(combined,canon_q,length);
-      
-    pushMessage(my_instance,prop,combined);
-    free(canon_q);
+
+    /** Pass the query downstream */
   }
-  
-  /** Pass the query downstream */
- skip_query:
-  if(dbcount > 0){
-    for(i = 0;i<dbcount;i++){
-      free(sesstbls[i]);
-    }
-    free(sesstbls);
-  }
+
   return my_session->down.routeQuery(my_session->down.instance,
 				     my_session->down.session, queue);
 }
