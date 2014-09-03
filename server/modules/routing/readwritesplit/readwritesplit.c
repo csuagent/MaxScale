@@ -1032,6 +1032,9 @@ static int routeQuery(
         GWBUF*  querybuf)
 {
         skygw_query_type_t qtype          = QUERY_TYPE_UNKNOWN;
+        GWBUF*             plainsqlbuf    = NULL;
+        char*              querystr       = NULL;
+        char*              startpos;
         mysql_server_cmd_t packet_type;
         uint8_t*           packet;
         int                ret = 0;
@@ -1040,6 +1043,9 @@ static int routeQuery(
         ROUTER_INSTANCE*   inst = (ROUTER_INSTANCE *)instance;
         ROUTER_CLIENT_SES* router_cli_ses = (ROUTER_CLIENT_SES *)router_session;
         bool               rses_is_closed = false;
+        size_t             len;
+        MYSQL*             mysql = NULL;
+        route_target_t     route_target;
 
         CHK_CLIENT_RSES(router_cli_ses);
 
@@ -1204,11 +1210,11 @@ static int routeQuery(
                 {
                         goto return_ret;
                 }
-                succp = get_dcb(&slave_dcb, router_cli_ses, BE_SLAVE);
-                
-                if (succp)
-                {                        
-                        if ((ret = slave_dcb->func.write(slave_dcb, gwbuf_clone(querybuf))) == 1)
+                   
+                if (TARGET_IS_SLAVE(route_target))
+                {
+                        if (TARGET_IS_NAMED_SERVER(route_target) ||
+                                TARGET_IS_RLAG_MAX(route_target))
                         {
                                 backend_ref_t* bref;
                                 
@@ -1222,12 +1228,7 @@ static int routeQuery(
                         }
                         else
                         {
-                                char* query_str = modutil_get_query(querybuf);
-                                LOGIF(LE, (skygw_log_write_flush(
-                                        LOGFILE_ERROR,
-                                        "Error : Routing query \"%s\" failed.",
-                                        (query_str == NULL ? "not available" : query_str))));
-                                free(query_str);
+                                rlag_max = rses_get_max_replication_lag(router_cli_ses);
                         }
                 }
                 rses_end_locked_router_action(router_cli_ses);
@@ -1266,9 +1267,9 @@ static int routeQuery(
                         succp = get_dcb(&master_dcb, router_cli_ses, BE_MASTER);
                 }
                 
-                if (succp)
-                {
-                        if ((ret = master_dcb->func.write(master_dcb, gwbuf_clone(querybuf))) == 1)
+                if (succp) /*< Have DCB of the target backend */
+                {                        
+                        if ((ret = target_dcb->func.write(target_dcb, gwbuf_clone(querybuf))) == 1)
                         {
                                 backend_ref_t* bref;
                                 

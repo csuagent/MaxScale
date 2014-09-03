@@ -514,7 +514,15 @@ static skygw_query_type_t resolve_query_type(
         }
         else if (lex->option_type == OPT_SESSION)
         {
-                type |=  QUERY_TYPE_SESSION_WRITE;
+		/** SHOW commands are all reads to one backend */
+		if (lex->sql_command == SQLCOM_SHOW_VARIABLES)
+		{
+			type |= QUERY_TYPE_SESSION_READ;
+		}
+		else
+		{
+			type |=  QUERY_TYPE_SESSION_WRITE;
+		}
                 goto return_qtype;
         }
         /**
@@ -533,10 +541,11 @@ static skygw_query_type_t resolve_query_type(
                         force_data_modify_op_replication)
                 {
                         type |= QUERY_TYPE_SESSION_WRITE;
-                } else {
+                } 
+                else 
+		{
                         type |= QUERY_TYPE_WRITE;
                 }
-            
                 goto return_qtype;
         }
         
@@ -885,7 +894,8 @@ char* skygw_get_canonical(
         }
         pi = (parsing_info_t *)gwbuf_get_buffer_object_data(querybuf, 
                                                             GWBUF_PARSING_INFO);
-
+	CHK_PARSING_INFO(pi);
+	
         if (pi == NULL)
         {
                 querystr = NULL;
@@ -904,32 +914,40 @@ char* skygw_get_canonical(
                 querystr = NULL;
                 goto retblock;
         }
-        
         querystr = strdup(pi->pi_query_plain_str);
-        
-        for (item=thd->free_list; item != NULL; item=item->next) 
+
+	for (item=thd->free_list; item != NULL; item=item->next) 
         {
                 Item::Type itype;
                 
-                itype = item->type();
-                
-                if (item->name != NULL &&
-                        (itype == Item::STRING_ITEM || 
-                        itype == Item::INT_ITEM ||
-                        itype == Item::DECIMAL_ITEM ||
-                        itype == Item::REAL_ITEM ||
-                        itype == Item::VARBIN_ITEM ||
-                        itype == Item::NULL_ITEM))
-                {
-                        if (itype == Item::STRING_ITEM && strlen(item->name) == 0)
-                        {
-                                querystr = replace_literal(querystr, "\"\"", "\"?\"");
-                        }
-                        else 
-                        {
-                                querystr = replace_literal(querystr, item->name, "?");
-                        }
-                }
+		if (item->name == NULL)
+		{
+			continue;
+		}
+		itype = item->type();
+
+		if (itype == Item::STRING_ITEM)
+		{
+			String tokenstr;
+			String* res = item->val_str_ascii(&tokenstr);
+			
+			if (res->is_empty()) /*< empty string */
+			{
+				querystr = replace_literal(querystr, "\"\"", "\"?\"");
+			}
+			else
+			{
+				querystr = replace_literal(querystr, res->ptr(), "?");
+			}
+		}
+		else if (itype == Item::INT_ITEM ||
+			itype == Item::DECIMAL_ITEM ||
+			itype == Item::REAL_ITEM ||
+			itype == Item::VARBIN_ITEM ||
+			itype == Item::NULL_ITEM)
+		{
+			querystr = replace_literal(querystr, item->name, "?");
+		}
         } /*< for */
 retblock:
         return querystr;
@@ -1066,7 +1084,7 @@ parsing_info_t* parsing_info_init(
                         LOGFILE_ERROR,
                         "Error : call to mysql_real_connect failed due %d, %s.",
                         mysql_errno(mysql),
-                                                 mysql_error(mysql))));
+			mysql_error(mysql))));
                 
                 goto retblock;
         }
@@ -1083,7 +1101,6 @@ parsing_info_t* parsing_info_init(
         if (pi == NULL)
         {
                 mysql_close(mysql);
-                mysql_thread_end();
                 goto retblock;
         }
 #if defined(SS_DEBUG)

@@ -79,7 +79,7 @@ libhintfilter.so:
 
 clean:
 	rm -f $(OBJ) $(MODULES)
-#	(cd hint; touch depend.mk; make clean)
+	(cd hint; touch depend.mk; make clean)
 
 tags:
 	ctags $(SRCS) $(HDRS)

@@ -1883,7 +1883,7 @@ char* replace_literal(
         const char* replacement)
 {
         const char* prefix = "[ ='\",\\(]"; /*< ' ','=','(',''',''"',',' are allowed before needle */
-        const char* suffix = "[^[:alnum:]]"; /*< alpha-num chars aren't allowed after the needle */
+        const char* suffix = "([^[:alnum:]]|$)"; /*< alpha-num chars aren't allowed after the needle */
         char*       search_re;
         char*       newstr;
         regex_t     re; 
@@ -1947,6 +1947,7 @@ char* replace_literal(
         
         regfree(&re);
         free(haystack);
+	free(search_re);
 retblock:
         return newstr;
 }
