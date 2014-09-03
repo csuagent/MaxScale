@@ -12,7 +12,7 @@
 #
 # Set debug flags
 #
-DEBUG := 
+DEBUG := ${MAXSCALE_DEBUG}
 
 #
 # Set build env
@@ -22,7 +22,7 @@ UNIX := Y
 # 
 # Set MaxScale branch directory
 #
-ROOT_PATH := $(HOME)/MaxScale_fork
+ROOT_PATH := $(HOME)/${MAXSCALE_SOURCE}
 
 INC_PATH  := /usr/include
 #
@@ -38,7 +38,7 @@ MYSQL_HEADERS := -I$(HOME)/mdb/include/ -I$(MYSQL_ROOT)/ -I$(MYSQL_ROOT)/extra -
 #
 # Set DYNLIB=Y if you want to link MaxScale with dynamic embedded lib
 #
-DYNLIB :=
+DYNLIB := ${MAXSCALE_DYNLIB}
 
 #
 # Set path to Embedded MySQL Server
@@ -50,4 +50,5 @@ endif
 #
 # Set path to MySQL errors file
 # 
-ERRMSG := $(HOME)/mdb/share/mysql/english
+ERRMSG := $(HOME)/usr/share/mysql
+
