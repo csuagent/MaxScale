@@ -1037,7 +1037,7 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
 
     if(my_instance->trgtype & TRG_SCHEMA && my_instance->shm_trg){
       int tbsz = 0,z;
-      char** tblnames = skygw_get_table_names(queue,&tbsz);
+      char** tblnames = skygw_get_table_names_full(queue,&tbsz);
       char* tmp;
       bool all_remotes = true;
 

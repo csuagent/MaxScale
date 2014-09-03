@@ -79,6 +79,7 @@ bool		is_drop_table_query(GWBUF* querybuf);
 bool		skygw_is_real_query(GWBUF* querybuf);
 void*		skygw_get_affected_tables(void* thdp);
 char**		skygw_get_table_names(GWBUF* querybuf,int* tblsize);
+char**		skygw_get_table_names_full(GWBUF* querybuf,int* tblsize);
 char*           skygw_get_canonical(GWBUF* querybuf);
 bool            parse_query (GWBUF* querybuf);
 parsing_info_t* parsing_info_init(void (*donefun)(void *));
