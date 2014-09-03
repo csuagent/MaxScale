@@ -17,6 +17,7 @@
  */
 
 /**
+ * @file mqfilter.c
  * MQ Filter - AMQP Filter. 
  * A filter that logs and publishes canonized queries on to a RabbitMQ server.
  *
@@ -30,7 +31,7 @@
  * 
  * To use a SSL connection the CA certificate, the client certificate and the client public key must be provided.
  * By default this filter uses a TCP connection.
- *
+ *@verbatim
  * The options for this filter are:
  *
  *	logging_trigger	Set the logging level
@@ -54,7 +55,7 @@
  *	source	Trigger on statements originating from a particular source (database user and host combination)
  *	schema	Trigger on a certain schema
  *	object	Trigger on a particular database object (table or view)
- *
+ *@endverbatim
  * See the individual struct documentations for logging trigger parameters
  */
 #include <stdio.h>
@@ -136,10 +137,11 @@ enum log_trigger_t{
  *
  * Log only those queries that come from a valid pair of username and hostname combinations.
  * Both options allow multiple values separated by a ','.
- * 
+ * @verbatim
  * Trigger options:
  *	logging_source_user	Comma-separated list of usernames to log
  *	logging_source_host	Comma-separated list of hostnames to log
+ * @endverbatim
  */
 typedef struct source_trigger_t{
   char**	user;
@@ -166,9 +168,10 @@ typedef struct schema_trigger_t{
  * Database object logging trigger
  *
  * Log only those queries that target specific database objects.
- * 
+ *@verbatim 
  * Trigger options:
  *	logging_object	Comma-separated list of database objects
+ *@endverbatim
  */
 typedef struct object_trigger_t{
   char**	objects;
@@ -1033,8 +1036,32 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
 
 
     if(my_instance->trgtype & TRG_SCHEMA && my_instance->shm_trg){
+      int tbsz = 0,z;
+      char** tblnames = skygw_get_table_names(queue,&tbsz);
+      char* tmp;
+      bool all_remotes = true;
 
-      if(my_session->db && strlen(my_session->db)>0){
+      for(z = 0;z<tbsz;z++){
+	if((tmp = strchr(tblnames[z],'.')) != NULL){
+	  tmp = strtok(tblnames[z],".");
+	  for(i = 0; i<my_instance->shm_trg->size; i++){
+	    
+	    if(strcmp(tmp,my_instance->shm_trg->objects[i]) == 0){
+	      
+	      skygw_log_write_flush(LOGFILE_TRACE,"Trigger is TRG_SCHEMA: %s = %s",tmp,my_instance->shm_trg->objects[i]);
+	      
+	      schema_ok = true;
+	      break;
+	    }
+	  } 
+	}else{
+	  all_remotes = false;
+	}
+	free(tblnames[z]);
+      }
+      free(tblnames);
+
+      if(!schema_ok && !all_remotes && my_session->db && strlen(my_session->db)>0){
 
 	for(i = 0; i<my_instance->shm_trg->size; i++){
 	  
@@ -1064,41 +1091,25 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
       sesstbls = skygw_get_table_names(queue,&dbcount);
 
       for(j = 0; j<dbcount; j++){      
-	
-	
+	char* tbnm = NULL;
+
+	if((strchr(sesstbls[j],'.')) != NULL){
+	  tbnm = strtok(sesstbls[j],".");
+	  tbnm = strtok(NULL,".");
+	}else{
+	  tbnm = sesstbls[j];
+	}
 	
 
 	for(i = 0; i<my_instance->obj_trg->size; i++){
 	  
-	  char* concatname = NULL;
-	  
-	  if(my_session->db){
-	    concatname = calloc(strlen(my_session->db) + strlen(my_instance->obj_trg->objects[i]) + 2,sizeof(char));
-	    strcpy(concatname,my_session->db);
-	    strcat(concatname,".");
-	    strcat(concatname,my_instance->obj_trg->objects[i]);
-	  }
 
-	  if(!strcmp(sesstbls[j],my_instance->obj_trg->objects[i])){
+	  if(!strcmp(tbnm,my_instance->obj_trg->objects[i])){
 	    obj_ok = true;
-	  }
-	  
-	  if(concatname && !strcmp(sesstbls[j],concatname)){
-	    obj_ok = true;
-	  }
-
-
-	  if(obj_ok){
-	    if(concatname){
-	      skygw_log_write_flush(LOGFILE_TRACE,"Trigger is TRG_OBJECT: %s = %s",concatname,sesstbls[j]);
-	      free(concatname);  
-	    }else{
-	      skygw_log_write_flush(LOGFILE_TRACE,"Trigger is TRG_OBJECT: %s = %s",my_instance->obj_trg->objects[i],sesstbls[j]);
-	    }
-	    
+	    skygw_log_write_flush(LOGFILE_TRACE,"Trigger is TRG_OBJECT: %s = %s",my_instance->obj_trg->objects[i],sesstbls[j]);
 	    break;
 	  }
-	  free(concatname);
+
 	}
 
       }
@@ -1107,6 +1118,7 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
 	  free(sesstbls[j]);
 	}
 	free(sesstbls);
+	dbcount = 0;
       }
 
       if(obj_ok && !my_instance->strict_logging){
