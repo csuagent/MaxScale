@@ -27,15 +27,17 @@ static char* server_groups[] = {
 int main(int argc, char** argv)
 {
 
-  int fdin,fdout,i=0,fnamelen,lines = 0;
-  unsigned int psize,tptr = 0,fsz = 0;
+ int fdin,fdout,i=0,fnamelen,fsz,lines = 0;
+  unsigned int psize;
   GWBUF** qbuff;
   char *qin, *outnm, *buffer, *tok;
-  
+
   if(argc != 3){
     printf("Usage: canonizer <input file> <output file>\n");
     return 1;
   } 
+
+
   
   bool failed = mysql_library_init(num_elements, server_options, server_groups);
 
@@ -49,50 +51,37 @@ int main(int argc, char** argv)
   fsz = lseek(fdin,0,SEEK_END);
   lseek(fdin,0,SEEK_SET);
 
-  if((buffer = malloc(sizeof(char)*fsz)) == NULL){
+  if(!(buffer = malloc(sizeof(char)*fsz))){
     printf("Error: Failed to allocate memory.");
     return 1;
   }
 
   read(fdin,buffer,fsz);
-  tok = buffer;
+  tok = strpbrk(buffer,"\n");
+  lines = 1;
   
-  while(tptr < fsz){
-    if(*(tok + tptr++) == '\n'){
-      lines++;
-    }    
+  while((tok = strpbrk(tok + 1,"\n"))){
+    lines++;
   }
   
   qbuff = malloc(sizeof(GWBUF*)*lines);
   
   i = 0;
-  tptr = 0;
-  tok = buffer;
+  tok = strtok(buffer,"\n");
 
-  while(((tok + tptr) - buffer) < fsz){
-
-    if(*(tok + tptr++) == '\n' || ((tok + tptr) - buffer) >= fsz){
-
-      qbuff[i] = gwbuf_alloc(tptr + 5);
-
-      if(qbuff[i]){
-
-      *(qbuff[i]->sbuf->data + 0) = (unsigned char)tptr;
-      *(qbuff[i]->sbuf->data + 1) = (unsigned char)(tptr>>8);
-      *(qbuff[i]->sbuf->data + 2) = (unsigned char)(tptr>>16);
-      *(qbuff[i]->sbuf->data + 3) = 0x00;
-      *(qbuff[i]->sbuf->data + 4) = 0x03;
-      memcpy(qbuff[i]->sbuf->data + 5,tok,tptr - 1);
-      *(qbuff[i]->sbuf->data + 5 + tptr - 1) = 0x00;
-      i++;
-      tok += tptr;
-      tptr = 0;
-      }else{
-	printf("Error: cannot allocate new GWBUF.");
-      }
-
-
-    }
+  while(tok){
+    qin = strdup(tok);
+    psize = strlen(qin);
+    qbuff[i] = gwbuf_alloc(psize + 6);
+    *(qbuff[i]->sbuf->data + 0) = (unsigned char)psize;
+    *(qbuff[i]->sbuf->data + 1) = (unsigned char)(psize>>8);
+    *(qbuff[i]->sbuf->data + 2) = (unsigned char)(psize>>16);
+    *(qbuff[i]->sbuf->data + 4) = 0x03;
+    memcpy(qbuff[i]->sbuf->data + 5,qin,psize);
+    *(qbuff[i]->sbuf->data + 5 + psize) = 0x00;
+    tok = strtok(NULL,"\n");
+    free(qin);
+    i++;
   }
 
   fdout = open(argv[2],O_TRUNC|O_CREAT|O_WRONLY,S_IRWXU|S_IXGRP|S_IXOTH);
@@ -102,10 +91,9 @@ int main(int argc, char** argv)
     tok = skygw_get_canonical(qbuff[i]);
     write(fdout,tok,strlen(tok));
     write(fdout,"\n",1);
-    free(tok);
     gwbuf_free(qbuff[i]);
   }
-  mysql_library_end();
+
   close(fdin);
   close(fdout);
   

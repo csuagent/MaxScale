@@ -18,11 +18,15 @@
 
 /**
  * MQ Filter - AMQP Filter. 
- * A simple query logging filter that logs all the queries and
- * publishes them on to a RabbitMQ server.
+ * A filter that logs and publishes canonized queries on to a RabbitMQ server.
  *
- * The filter makes no attempt to deal with query packets that do not fit
- * in a single GWBUF.
+ * The filter reads the routed query, forms a canonized version of it and publishes the
+ * message on the RabbitMQ server. The messages are timestamped with a pure unix-timestamp that
+ * is meant to be easily transformable in various environments. Replies to the queries are also logged
+ * and published on the RabbitMQ server.
+ *
+ * The filter makes no attempt to deal with queries that do not fit
+ * in a single GWBUF or result sets that span multiple GWBUFs.
  * 
  * To use a SSL connection the CA certificate, the client certificate and the client public key must be provided.
  * By default this filter uses a TCP connection.
@@ -30,6 +34,8 @@
  * The options for this filter are:
  *
  *	logging_trigger	Set the logging level
+ *	logging_strict	Sets whether to trigger when any of the parameters match or only if all parameters match
+ *	logging_log_all	Log only SELECT, UPDATE, DELETE and INSERT or all posddible queries
  * 	hostname	The server hostname where the messages are sent
  * 	port		Port to send the messages to
  * 	username	Server login username
@@ -44,7 +50,7 @@
  * 	ssl_client_key	Path to the client public key in PEM format
  * 
  * The logging trigger levels are:
- *	all	Trigger on all statements
+ *	all	Log everything
  *	source	Trigger on statements originating from a particular source (database user and host combination)
  *	schema	Trigger on a certain schema
  *	object	Trigger on a particular database object (table or view)
@@ -129,11 +135,11 @@ enum log_trigger_t{
  * Source logging trigger
  *
  * Log only those queries that come from a valid pair of username and hostname combinations.
- * Both options allow multiple values deparated by a '|'.
+ * Both options allow multiple values separated by a ','.
  * 
  * Trigger options:
- *	logging_source_user	Usernames to log
- *	logging_source_host	Hostnames to log
+ *	logging_source_user	Comma-separated list of usernames to log
+ *	logging_source_host	Comma-separated list of hostnames to log
  */
 typedef struct source_trigger_t{
   char**	user;
@@ -148,7 +154,7 @@ typedef struct source_trigger_t{
  * Log only those queries that target a specific database.
  * 
  * Trigger options:
- *	logging_schema	List of databases separated by a '|'
+ *	logging_schema	Comma-separated list of databases
  */
 typedef struct schema_trigger_t{
   char**	objects;
@@ -162,7 +168,7 @@ typedef struct schema_trigger_t{
  * Log only those queries that target specific database objects.
  * 
  * Trigger options:
- *	logging_object	List of tables or views separated by a '|'
+ *	logging_object	Comma-separated list of database objects
  */
 typedef struct object_trigger_t{
   char**	objects;
@@ -177,7 +183,7 @@ typedef struct object_trigger_t{
  * 
  * Default values assume that a local RabbitMQ server is running on port 5672 with the default
  * user 'guest' and the password 'guest' using a default exchange named 'default_exchange' with a
- * routing key named 'key'. Type of the exchange is 'direct' by default. 
+ * routing key named 'key'. Type of the exchange is 'direct' by default and all queries are logged. 
  * 
  */
 
@@ -192,6 +198,8 @@ typedef struct {
   char	*key;
   char	*queue;
   bool	use_ssl;
+  bool log_all;
+  bool strict_logging;
   char	*ssl_CA_cert;
   char	*ssl_client_cert;
   char 	*ssl_client_key;
@@ -450,7 +458,6 @@ createInstance(char **options, FILTER_PARAMETER **params)
   MQ_INSTANCE	*my_instance;
   int paramcount = 0, parammax = 64, i = 0, x = 0, arrsize = 0;
   FILTER_PARAMETER** paramlist;  
-  void* trg = NULL;
   char** arr;
   
   if ((my_instance = calloc(1, sizeof(MQ_INSTANCE)))&& 
@@ -470,8 +477,9 @@ createInstance(char **options, FILTER_PARAMETER **params)
       my_instance->conn_stat = AMQP_STATUS_OK;
       my_instance->rconn_intv = 1;
       my_instance->port = 5672;
-      my_instance->trgtype = TRG_ALL;      
-
+      my_instance->trgtype = TRG_ALL;
+      my_instance->log_all = false;
+      my_instance->strict_logging = true;
 
       for(i = 0;params[i];i++){
 	if(!strcmp(params[i]->name,"hostname")){
@@ -508,7 +516,7 @@ createInstance(char **options, FILTER_PARAMETER **params)
 
 	}else if(!strcmp(params[i]->name,"logging_trigger")){
 	  
-	  arr = parse_optstr(params[i]->value,"|",&arrsize);
+	  arr = parse_optstr(params[i]->value,",",&arrsize);
 
 	  for(x = 0;x<arrsize;x++){
 	    if(!strcmp(arr[x],"source")){
@@ -575,7 +583,7 @@ createInstance(char **options, FILTER_PARAMETER **params)
 	if(!strcmp(paramlist[i]->name,"logging_source_user")){
 	    
 	  if(my_instance->src_trg){
-	    my_instance->src_trg->user = parse_optstr(paramlist[i]->value,"|",&arrsize);
+	    my_instance->src_trg->user = parse_optstr(paramlist[i]->value,",",&arrsize);
 	    my_instance->src_trg->usize = arrsize;
 	    arrsize = 0;
 	  }
@@ -583,7 +591,7 @@ createInstance(char **options, FILTER_PARAMETER **params)
 	}else if(!strcmp(paramlist[i]->name,"logging_source_host")){
 	    
 	  if(my_instance->src_trg){
-	    my_instance->src_trg->host = parse_optstr(paramlist[i]->value,"|",&arrsize);
+	    my_instance->src_trg->host = parse_optstr(paramlist[i]->value,",",&arrsize);
 	    my_instance->src_trg->hsize = arrsize;
 	    arrsize = 0;
 	  }
@@ -591,7 +599,7 @@ createInstance(char **options, FILTER_PARAMETER **params)
 	}else if(!strcmp(paramlist[i]->name,"logging_schema")){
 	    
 	  if(my_instance->shm_trg){
-	    my_instance->shm_trg->objects = parse_optstr(paramlist[i]->value,"|",&arrsize);
+	    my_instance->shm_trg->objects = parse_optstr(paramlist[i]->value,",",&arrsize);
 	    my_instance->shm_trg->size = arrsize;
 	    arrsize = 0;
 	  }
@@ -599,11 +607,19 @@ createInstance(char **options, FILTER_PARAMETER **params)
 	}else if(!strcmp(paramlist[i]->name,"logging_object")){
 	    
 	  if(my_instance->obj_trg){
-	    my_instance->obj_trg->objects = parse_optstr(paramlist[i]->value,"|",&arrsize);
+	    my_instance->obj_trg->objects = parse_optstr(paramlist[i]->value,",",&arrsize);
 	    my_instance->obj_trg->size = arrsize;
 	    arrsize = 0;
 	  }
 
+	}else if(!strcmp(paramlist[i]->name,"logging_log_all")){
+	  if(!strcmp(paramlist[i]->value,"true")){
+	    my_instance->log_all = true;
+	  }
+	}else if(!strcmp(paramlist[i]->name,"logging_strict")){
+	  if(strcmp(paramlist[i]->value,"false") == 0){
+	    my_instance->strict_logging = false;
+	  }
 	}
 	free(paramlist[i]->name);
 	free(paramlist[i]->value);
@@ -911,8 +927,9 @@ unsigned int pktlen(void* c)
  * query is passed to the downstream component
  * (filter or router) in the filter chain.
  *
- * The function tries to extract a SQL query out of the query buffer,
- * canonize the query, add a timestamp to it and publish the resulting string on the exchange.
+ * The function checks whether required logging trigger conditions are met and if so, 
+ * tries to extract a SQL query out of the query buffer, canonize the query, add 
+ * a timestamp to it and publish the resulting string on the exchange.
  * The message is tagged with an unique identifier and the clientReply will
  * use the same identifier for the reply from the backend to form a query-reply pair.
  * 
@@ -952,8 +969,15 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
 
     if(!success){
       skygw_log_write(LOGFILE_ERROR,"Error: Parsing query failed.");      
+      goto send_downstream;
     }
 
+    if(!my_instance->log_all){
+      if(!skygw_is_real_query(queue)){
+	goto send_downstream;
+      }
+    } 
+    
     if(my_instance->trgtype & TRG_SOURCE && my_instance->src_trg){
       
       if(session_isvalid(my_session->session)){
@@ -967,6 +991,7 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
 
 	    if(strcmp(my_instance->src_trg->user[i],sessusr) == 0)
 	      {
+		skygw_log_write_flush(LOGFILE_TRACE,"Trigger is TRG_SOURCE: user: %s = %s",my_instance->src_trg->user[i],sessusr);
 		src_ok = true;
 		break;
 	      }
@@ -984,6 +1009,7 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
 	    
 	    if(strcmp(my_instance->src_trg->host[i],sesshost) == 0)
 	      {
+		skygw_log_write_flush(LOGFILE_TRACE,"Trigger is TRG_SOURCE: host: %s = %s",my_instance->src_trg->host[i],sesshost);
 		src_ok = true;
 		break;
 	      }
@@ -994,47 +1020,123 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
 
       }
 
+      if(src_ok && !my_instance->strict_logging){
+	schema_ok = true;
+	obj_ok = true;
+	goto validate_triggers;
+      }
+
+    }else{
+      src_ok = true;
     }
+
+
 
     if(my_instance->trgtype & TRG_SCHEMA && my_instance->shm_trg){
 
       if(my_session->db && strlen(my_session->db)>0){
 
 	for(i = 0; i<my_instance->shm_trg->size; i++){
-
+	  
 	  if(strcmp(my_session->db,my_instance->shm_trg->objects[i]) == 0){
+	    
+	    skygw_log_write_flush(LOGFILE_TRACE,"Trigger is TRG_SCHEMA: %s = %s",my_session->db,my_instance->shm_trg->objects[i]);
+	    
 	    schema_ok = true;
 	    break;
 	  }
 	}
       }
 
+      if(schema_ok && !my_instance->strict_logging){
+	src_ok = true;
+	obj_ok = true;
+	goto validate_triggers;
+      }
+
+    }else{
+      schema_ok = true;
     }
+
 
     if(my_instance->trgtype & TRG_OBJECT && my_instance->obj_trg){
 
       sesstbls = skygw_get_table_names(queue,&dbcount);
 
       for(j = 0; j<dbcount; j++){      
+	
+	
+	
 
 	for(i = 0; i<my_instance->obj_trg->size; i++){
+	  
+	  char* concatname = NULL;
+	  
+	  if(my_session->db){
+	    concatname = calloc(strlen(my_session->db) + strlen(my_instance->obj_trg->objects[i]) + 2,sizeof(char));
+	    strcpy(concatname,my_session->db);
+	    strcat(concatname,".");
+	    strcat(concatname,my_instance->obj_trg->objects[i]);
+	  }
 
 	  if(!strcmp(sesstbls[j],my_instance->obj_trg->objects[i])){
 	    obj_ok = true;
-	    break;
+	  }
+	  
+	  if(concatname && !strcmp(sesstbls[j],concatname)){
+	    obj_ok = true;
 	  }
 
+
+	  if(obj_ok){
+	    if(concatname){
+	      skygw_log_write_flush(LOGFILE_TRACE,"Trigger is TRG_OBJECT: %s = %s",concatname,sesstbls[j]);
+	      free(concatname);  
+	    }else{
+	      skygw_log_write_flush(LOGFILE_TRACE,"Trigger is TRG_OBJECT: %s = %s",my_instance->obj_trg->objects[i],sesstbls[j]);
+	    }
+	    
+	    break;
+	  }
+	  free(concatname);
 	}
+
       }
+      if(dbcount > 0){
+	for(j = 0; j<dbcount; j++){
+	  free(sesstbls[j]);
+	}
+	free(sesstbls);
+      }
+
+      if(obj_ok && !my_instance->strict_logging){
+	src_ok = true;
+	schema_ok = true;
+	goto validate_triggers;
+      }
+
+    }else{
+      obj_ok = true;
     }
 
-    
+    if(my_instance->trgtype == TRG_ALL){
+      skygw_log_write_flush(LOGFILE_TRACE,"Trigger is TRG_ALL");
+    }
 
-    if(src_ok||schema_ok||obj_ok){
+  validate_triggers:
+
+    if(src_ok&&schema_ok&&obj_ok){
 
       /**
        * Something matched the trigger, log the query
        */
+
+      skygw_log_write_flush(LOGFILE_TRACE,"Routing message to: %s:%d %s as %s/%s, exchange: %s<%s> key:%s queue:%s",
+			    my_instance->hostname,my_instance->port,
+			    my_instance->vhost,my_instance->username,
+			    my_instance->password,my_instance->exchange,
+			    my_instance->exchange_type,my_instance->key,
+			    my_instance->queue);
 
       if(my_session->uid == NULL){
 
@@ -1093,16 +1195,9 @@ routeQuery(FILTER *instance, void *session, GWBUF *queue)
 
     } 
 
-    if(dbcount > 0){
-      for(i = 0;i<dbcount;i++){
-	free(sesstbls[i]);
-      }
-      free(sesstbls);
-    }
-
     /** Pass the query downstream */
   }
-
+ send_downstream:
   return my_session->down.routeQuery(my_session->down.instance,
 				     my_session->down.session, queue);
 }

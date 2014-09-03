@@ -9,7 +9,9 @@
 #include <amqp_framing.h>
 #include <mysql.h>
 #include <signal.h>
-
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #ifdef CONFIG_IN_ETC
 #define CONFIG 1
 #else
@@ -35,6 +37,7 @@ typedef struct consumer_t
 }CONSUMER;
 
 static int all_ok;
+static FILE* out_fd;
 static CONSUMER* c_inst;
 static char* DB_DATABASE = "CREATE DATABASE IF NOT EXISTS %s;";
 static char* DB_TABLE = "CREATE TABLE IF NOT EXISTS pairs (tag VARCHAR(64) PRIMARY KEY NOT NULL, query VARCHAR(2048), reply VARCHAR(2048), date_in DATETIME NOT NULL, date_out DATETIME DEFAULT NULL, counter INT DEFAULT 1)";
@@ -77,6 +80,8 @@ int handler(void* user, const char* section, const char* name,
       c_inst->dbuser = strdup(value);
     }else if(strcmp(name,"dbpasswd") == 0){
       c_inst->dbpasswd = strdup(value);
+    }else if(strcmp(name,"logfile") == 0){
+      out_fd = fopen(value,"ab");
     }
 
   }
@@ -119,7 +124,7 @@ int connectToServer(MYSQL* server)
  
   
   if(result==NULL){
-    printf("Error: Could not connect to MySQL server: %s\n",mysql_error(server));
+    fprintf(out_fd,"Error: Could not connect to MySQL server: %s\n",mysql_error(server));
     return 0;
   }
 
@@ -128,7 +133,7 @@ int connectToServer(MYSQL* server)
 
   
   if(!qstr){
-    printf( "Fatal Error: Cannot allocate enough memory.\n");
+    fprintf(stderr, "Fatal Error: Cannot allocate enough memory.\n");
     return 0;
   }
 
@@ -138,18 +143,18 @@ int connectToServer(MYSQL* server)
   memset(qstr,0,bsz);
   sprintf(qstr,DB_DATABASE,c_inst->dbname);
   if(mysql_query(server,qstr)){
-    printf("Error: Could not send query MySQL server: %s\n",mysql_error(server));
+    fprintf(stderr,"Error: Could not send query MySQL server: %s\n",mysql_error(server));
   }
   memset(qstr,0,bsz);
   sprintf(qstr,"USE %s;",c_inst->dbname);
   if(mysql_query(server,qstr)){
-    printf("Error: Could not send query MySQL server: %s\n",mysql_error(server));
+    fprintf(stderr,"Error: Could not send query MySQL server: %s\n",mysql_error(server));
   }
   
   memset(qstr,0,bsz);
   sprintf(qstr,DB_TABLE);
   if(mysql_query(server,qstr)){
-    printf("Error: Could not send query MySQL server: %s\n",mysql_error(server));
+    fprintf(stderr,"Error: Could not send query MySQL server: %s\n",mysql_error(server));
   }
 
   free(qstr);
@@ -173,12 +178,12 @@ int sendMessage(MYSQL* server, amqp_message_t* msg)
 
   
   sprintf(qstr,"%.*s",(int)msg->body.len,(char *)msg->body.bytes);
-  printf("Received: %s\n",qstr);
+  fprintf(out_fd,"Received: %s\n",qstr);
   char *ptr = strtok(qstr,"|");
   sprintf(rawdate,"%s",ptr);
   ptr = strtok(NULL,"\n\0");
   if(ptr == NULL){
-    printf("Message content not valid.\n");
+    fprintf(out_fd,"Message content not valid.\n");
     rval = 1;
     goto cleanup;
   }
@@ -216,7 +221,7 @@ int sendMessage(MYSQL* server, amqp_message_t* msg)
   
 
   if(rval){
-    printf("Could not send query to SQL server:%s\n",mysql_error(server));
+    fprintf(stderr,"Could not send query to SQL server:%s\n",mysql_error(server));
     goto cleanup;
   }
 
@@ -239,7 +244,7 @@ int sendToServer(MYSQL* server, amqp_message_t* a, amqp_message_t* b){
   char *qstr = calloc(buffsz,sizeof(char));
 
   if(!qstr){
-    printf( "Fatal Error: Cannot allocate enough memory.\n");
+    fprintf(out_fd, "Fatal Error: Cannot allocate enough memory.\n");
     free(qstr);
     return 0;
   }
@@ -278,7 +283,7 @@ int sendToServer(MYSQL* server, amqp_message_t* a, amqp_message_t* b){
 	qstr = qtmp;
 	buffsz *= 2;
       }else{
-	printf( "Fatal Error: Cannot allocate enough memory.\n");
+	fprintf(stderr, "Fatal Error: Cannot allocate enough memory.\n");
 	return 0;
       }
 
@@ -321,7 +326,7 @@ int sendToServer(MYSQL* server, amqp_message_t* a, amqp_message_t* b){
   free(clntag);
   
   if(mysql_query(server,qstr)){
-    printf("Could not send query to SQL server:%s\n",mysql_error(server));
+    fprintf(stderr,"Could not send query to SQL server:%s\n",mysql_error(server));
     free(qstr);
     return 0;
   }
@@ -385,9 +390,10 @@ int main(int argc, char** argv)
   timeout.tv_sec = 1;
   timeout.tv_usec = 0;
   all_ok = 1;
+  out_fd = NULL;
 
   if((c_inst = calloc(1,sizeof(CONSUMER))) == NULL){
-    printf( "Fatal Error: Cannot allocate enough memory.\n");
+    fprintf(stderr, "Fatal Error: Cannot allocate enough memory.\n");
     return 1;
   }
 
@@ -396,17 +402,23 @@ int main(int argc, char** argv)
     
     /**Try to parse a config in the same directory*/
     if(ini_parse(fname,handler,NULL) < 0){
-      printf( "Fatal Error: Error parsing configuration file!\n");
+      fprintf(out_fd, "Fatal Error: Error parsing configuration file!\n");
     goto fatal_error;
 
     }
   }
 
+  if(out_fd == NULL){
+    out_fd = stdout;
+  }
+
+  fprintf(out_fd,"\n--------------------------------------------------------------\n");
+  
   /**Confirm that all parameters were in the configuration file*/
   if(!c_inst->hostname||!c_inst->vhost||!c_inst->user||
      !c_inst->passwd||!c_inst->dbpasswd||!c_inst->queue||
      !c_inst->dbserver||!c_inst->dbname||!c_inst->dbuser){
-    printf( "Fatal Error: Inadequate configuration file!\n");
+    fprintf(stderr, "Fatal Error: Inadequate configuration file!\n");
     goto fatal_error;    
   }
 
@@ -414,19 +426,19 @@ int main(int argc, char** argv)
 
   if((conn = amqp_new_connection()) == NULL || 
      (socket = amqp_tcp_socket_new(conn)) == NULL){
-    printf( "Fatal Error: Cannot create connection object or socket.\n");
+    fprintf(stderr, "Fatal Error: Cannot create connection object or socket.\n");
     goto fatal_error;
   }
   
   if(amqp_socket_open(socket, c_inst->hostname, c_inst->port)){
-    printf( "RabbitMQ Error: Cannot open socket.\n");
+    fprintf(stderr, "RabbitMQ Error: Cannot open socket.\n");
     goto error;
   }
   
   ret = amqp_login(conn, c_inst->vhost, 0, 131072, 0, AMQP_SASL_METHOD_PLAIN, c_inst->user, c_inst->passwd);
 
   if(ret.reply_type != AMQP_RESPONSE_NORMAL){
-    printf( "RabbitMQ Error: Cannot login to server.\n");
+    fprintf(stderr, "RabbitMQ Error: Cannot login to server.\n");
     goto error;
   }
 
@@ -434,17 +446,16 @@ int main(int argc, char** argv)
   ret = amqp_get_rpc_reply(conn);
 
   if(ret.reply_type != AMQP_RESPONSE_NORMAL){
-    printf( "RabbitMQ Error: Cannot open channel.\n");
+    fprintf(stderr, "RabbitMQ Error: Cannot open channel.\n");
     goto error;
   }  
 
   reply = malloc(sizeof(amqp_message_t));
   if(!reply){
-    printf( "Error: Cannot allocate enough memory.\n");
+    fprintf(stderr, "Error: Cannot allocate enough memory.\n");
     goto error;
   }
   amqp_basic_consume(conn,channel,amqp_cstring_bytes(c_inst->queue),amqp_empty_bytes,0,0,0,amqp_empty_table);
-  int timed_out = 0;
 
   while(all_ok){
      
@@ -452,15 +463,8 @@ int main(int argc, char** argv)
 
     /**No frames to read from server, possibly out of messages*/
     if(status == AMQP_STATUS_TIMEOUT){ 
-      timed_out = 1;
       sleep(timeout.tv_sec);
-      write(1,".",1);
       continue;
-    }else{
-      if(timed_out){
-	timed_out = 0;
-	write(1,"\n",1);
-      }
     }
 
     if(frame.payload.method.id == AMQP_BASIC_DELIVER_METHOD){
@@ -471,7 +475,7 @@ int main(int argc, char** argv)
 
       if(sendMessage(&db_inst,reply)){
 
-	printf("RabbitMQ Error: Received malformed message.\n");
+	fprintf(stderr,"RabbitMQ Error: Received malformed message.\n");
 	amqp_basic_reject(conn,channel,decoded->delivery_tag,0);	
 	amqp_destroy_message(reply);
 
@@ -483,14 +487,14 @@ int main(int argc, char** argv)
       }
       
     }else{
-      printf("RabbitMQ Error: Received method from server: %s\n",amqp_method_name(frame.payload.method.id));
+      fprintf(stderr,"RabbitMQ Error: Received method from server: %s\n",amqp_method_name(frame.payload.method.id));
       all_ok = 0;
       goto error;
     }
 
   }
 
-  printf("Shutting down...\n");
+  fprintf(out_fd,"Shutting down...\n");
  error:
 
   mysql_close(&db_inst);
@@ -510,6 +514,9 @@ int main(int argc, char** argv)
   amqp_connection_close(conn, AMQP_REPLY_SUCCESS);
   amqp_destroy_connection(conn);
  fatal_error:
+  
+  fclose(out_fd);
+  
   if(c_inst){
 
     free(c_inst->hostname);

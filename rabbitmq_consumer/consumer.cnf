@@ -11,6 +11,7 @@
 #dbname		Name of the databse to use
 #dbuser		SQL server username
 #dbpasswd	SQL server password
+#logfile	Message log filename
 #
 [consumer]
 hostname=127.0.0.1
@@ -24,3 +25,4 @@ dbport=3000
 dbname=mqpairs
 dbuser=maxuser
 dbpasswd=maxpwd
+#logfile=consumer.log
