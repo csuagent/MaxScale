@@ -1,15 +1,16 @@
 cmake_minimum_required (VERSION 2.6)
 
-set(CMAKE_LIBRARY_PATH ${CMAKE_LIBRARY_PATH} /usr/lib /usr/lib64 /usr/local/lib /usr/local/lib64 /usr/lib/mariadb /usr/lib64/mariadb)
-set(CMAKE_INCLUDE_PATH ${CMAKE_INCLUDE_PATH} /usr/include /usr/local/include /usr/include/mysql /usr/local/include/mysql /usr/include/mariadb /usr/local/include/mariadb)
+set(CMAKE_LIBRARY_PATH ${CMAKE_LIBRARY_PATH} /usr /usr/local)
+set(CMAKE_INCLUDE_PATH ${CMAKE_INCLUDE_PATH} /usr /usr/local)
 
 include(InstallRequiredSystemLibraries)
 
 project (consumer)
 
-find_path(MYSQL_INCLUDE_DIRS mysql.h)
-find_library(MYSQL_LIBRARIES NAMES mysqlclient)
-find_library(RABBITMQ_C_LIBRARIES NAMES rabbitmq)
+find_path(MYSQL_INCLUDE_DIRS mysql.h PATH_SUFFIXES include include/mysql include/mariadb)
+find_path(RABBITMQ_C_INCLUDE_DIRS amqp.h PATH_SUFFIXES include)
+find_library(MYSQL_LIBRARIES NAMES mysqlclient PATH_SUFFIXES lib lib/mysql lib/mariadb lib64 lib64/mariadb lib64/mysql)
+find_library(RABBITMQ_C_LIBRARIES NAMES rabbitmq PATH_SUFFIXES lib lib64)
 
 include_directories(${MYSQL_INCLUDE_DIRS})
 include_directories(${RABBITMQ_C_INCLUDE_DIRS})
@@ -21,15 +22,22 @@ link_directories(${CMAKE_SOURCE_DIR}/inih)
 if(RABBITMQ_C_LIBRARIES AND MYSQL_LIBRARIES AND MYSQL_INCLUDE_DIRS)
 
 add_executable (consumer consumer.c ${MYSQL_LIBRARIES} ${RABBITMQ_C_LIBRARIES})
-target_link_libraries(consumer mysqlclient)
-target_link_libraries(consumer rabbitmq)
+target_link_libraries(consumer ${MYSQL_LIBRARIES})
+target_link_libraries(consumer ${RABBITMQ_C_LIBRARIES})
 target_link_libraries(consumer inih)
 install(TARGETS consumer DESTINATION bin)
-install(FILES consumer.cnf DESTINATION share/consumer)
+install(FILES consumer.cnf DESTINATION etc)
 
 
 else(RABBITMQ_C_LIBRARIES AND MYSQL_LIBRARIES AND MYSQL_INCLUDE_DIRS)
-message(FATAL_ERROR "Error: Can not find requred libraries: libmysqld, librabbitmq.")
+
+if(NOT RABBITMQ_C_LIBRARIES)
+message(FATAL_ERROR "Error: Can not find requred libraries: librabbitmq.")
+endif(NOT RABBITMQ_C_LIBRARIES)
+
+if(NOT MYSQL_LIBRARIES)
+message(FATAL_ERROR "Error: Can not find requred libraries: libmysqlclient.")
+endif(NOT MYSQL_LIBRARIES)
 
 endif(RABBITMQ_C_LIBRARIES AND MYSQL_LIBRARIES AND MYSQL_INCLUDE_DIRS)
 
